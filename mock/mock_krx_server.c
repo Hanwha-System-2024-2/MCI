@@ -11,9 +11,6 @@
 
 #define BUFFER_SIZE 1024
 
-// #define KRX_SERVER_IP "127.0.0.1"
-// #define KRX_SERVER_PORT 12345
-
 void start_krx_server() {
     int server_sock, client_sock;
     struct sockaddr_in server_addr, client_addr;

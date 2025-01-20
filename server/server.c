@@ -11,11 +11,6 @@
 #include "oms_network.h"
 #include "env.h"
 
-// #define KRX_SERVER_IP "127.0.0.1"
-// #define KRX_SERVER_PORT 12345
-// #define OMS_SERVER_IP "127.0.0.1"
-// #define OMS_SERVER_PORT 54321
-
 int main() {
     int krx_sock, oms_sock;
     struct sockaddr_in krx_addr, oms_addr;
