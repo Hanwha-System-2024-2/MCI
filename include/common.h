@@ -6,7 +6,7 @@
 
 // 헤더 구성
 typedef struct {
-	char tr_id[4];
+	int tr_id;
 	int length;
 } hdr;
 
