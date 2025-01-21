@@ -37,4 +37,23 @@ typedef struct {
    char stock_name[50];
 } stock_info;
 
+/* tr_id */
+
+// OMS - MCI 관련
+#define OMQ_LOGIN 1
+#define OMQ_STOCK_INFOS 2
+#define OMQ_CURRENT_MARKET_PRICE 3
+#define MOT_LOGIN 4
+#define MOT_STOCK_INFOS 5
+#define MOT_CURRENT_MARKET_PRICE 6
+
+// KRX - MCI 관련
+#define KMT_STOCK_INFOS 7
+#define KMT_CURRENT_MARKET_PRICES 8
+
+// KRX - FEP 관련
+#define FKQ_ORDER 9 
+#define KFT_ORDER 10
+#define KFT_EXECUTION 11
+
 #endif

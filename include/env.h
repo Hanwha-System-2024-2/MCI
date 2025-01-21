@@ -11,4 +11,7 @@
 #define KRX_SERVER_IP "127.0.0.1"  
 #define KRX_SERVER_PORT 12345
 
+#define MCI_SERVER_IP "127.0.0.1"
+#define MCI_SERVER_PORT 8081
+
 #endif
