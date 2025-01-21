@@ -33,5 +33,10 @@ typedef struct {
 } mot_market_price;
 
 void handle_oms(int oms_sock, int pipe_write, int pipe_read);
+void handle_omq_login(omq_login *data, int oms_sock);
+void handle_omq_stocks(omq_stocks *data, int pipe_write);
+void handle_mot_stocks(mot_stocks *data, int oms_sock);
+void handle_omq_market_price(omq_market_price *data, int pipe_write);
+void handle_mot_market_price(mot_market_price *data, int oms_sock);
 
 #endif
