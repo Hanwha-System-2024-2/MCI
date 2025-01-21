@@ -32,5 +32,6 @@ typedef struct {
     current_market_price body[4]; // kmt_current_market_prices 구조체에서 current_market_price[4]
 } mot_market_price;
 
+void handle_oms(int oms_sock, int pipe_write, int pipe_read);
 
 #endif
