@@ -21,7 +21,7 @@ typedef struct  {
 typedef struct {
   char stock_code[6];       // 종목코드
   char stock_name[50];      // 종목명
-  float price;              // 시세(현재가)
+  int price;              // 시세(현재가)
   long volume;              // 거래량
   int change;               // 대비
   char rate_of_change[10];  // 등락률
