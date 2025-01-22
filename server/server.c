@@ -44,9 +44,9 @@ int main() {
 
     pid_t krx_pid = fork();
     if (krx_pid == 0) {
-        close(pipe_krx_to_oms[0]);
-        close(pipe_oms_to_krx[1]);
-        handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
+        close(pipe_krx_to_oms[0]); 
+        close(pipe_oms_to_krx[1]); 
+        handle_kmt_price(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
     } else if (krx_pid < 0) {
         perror("Fork for KRX failed");
         close(krx_sock);

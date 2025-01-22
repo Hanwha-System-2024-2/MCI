@@ -1,7 +1,7 @@
 #ifndef KRX_HEADER_H
 #define KRX_HEADER_H
 
-#include "common.h" // 공통 헤더 포함
+#include "../include/common.h" // 공통 헤더 포함
 
 // 종목 정보 배열 구조체 
 typedef struct {
