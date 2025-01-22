@@ -210,7 +210,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                 {
                     // 헤더 파싱
                     hdr *header = (hdr *)krx_buffer;
-                    size_t total_length = sizeof(hdr) + header->length;
+                    size_t total_length = header->length;
 
                     if (krx_buffer_offset < total_length)
                     {
