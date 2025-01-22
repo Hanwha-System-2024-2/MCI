@@ -11,25 +11,58 @@
 
 #define BUFFER_SIZE 1024
 
+void send_login_request(int client_sock, const char *user_id, const char *user_pw) {
+    omq_login login;
+    memset(&login, 0, sizeof(login));
+
+    login.hdr.tr_id = 1; // omq_login
+    login.hdr.length = 108; // 길이
+    strncpy(login.user_id, user_id, sizeof(login.user_id) - 1);
+    strncpy(login.user_pw, user_pw, sizeof(login.user_pw) - 1);
+
+    if (send(client_sock, (void *)&login, sizeof(login), 0) == -1) {
+        perror("[OMS Client] Send failed");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
+}
 void handle_server_response(int server_sock) {
     char buffer[BUFFER_SIZE];
+    size_t buffer_offset = 0;
 
     while (1) {
-        ssize_t recv_len = recv(server_sock, buffer, BUFFER_SIZE, 0);
+        ssize_t recv_len = recv(server_sock, buffer + buffer_offset, BUFFER_SIZE - buffer_offset, 0);
         if (recv_len <= 0) {
             perror("Receive failed or connection closed");
             break;
         }
 
-        mot_stocks *data = (mot_stocks *)buffer;
+        buffer_offset += recv_len;
 
-        if (recv_len == sizeof(mot_login)) {
-            mot_login *login = (mot_login *) buffer;
-            printf("[OMS Client] Login Response: tr_id: %d, status code: %d\n", login->hdr.tr_id, login->status_code);
-            continue;
+        size_t processed_bytes = 0;
+        while (processed_bytes + sizeof(hdr) <= buffer_offset) {
+            hdr *header = (hdr *)(buffer + processed_bytes);
+
+            if (processed_bytes + header->length > buffer_offset) {
+                break;
+            }
+
+            if (header->tr_id == MOT_LOGIN) {
+                mot_login *login = (mot_login *)(buffer + processed_bytes);
+                printf("[OMS Client] Login Response: tr_id: %d, status code: %d\n", login->hdr.tr_id, login->status_code);
+            } else {
+                printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
+            }
+
+            processed_bytes += header->length;
         }
 
-        printf("[OMS Client] Received TR_ID: %d from MCI Server\n", data->hdr.tr_id);
+        if (processed_bytes < buffer_offset) {
+            memmove(buffer, buffer + processed_bytes, buffer_offset - processed_bytes);
+        }
+        buffer_offset -= processed_bytes;
     }
 }
 
@@ -43,8 +76,8 @@ void start_oms_client() {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(MCI_SERVER_PORT); // Connect to MCI Server (Port 8081)
-    server_addr.sin_addr.s_addr = inet_addr(MCI_SERVER_IP); // Replace with MCI Server IP
+    server_addr.sin_port = htons(MCI_SERVER_PORT); 
+    server_addr.sin_addr.s_addr = inet_addr(MCI_SERVER_IP);
 
     if (connect(client_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         perror("Connection to MCI Server failed");
@@ -54,19 +87,14 @@ void start_oms_client() {
 
     printf("[OMS Client] Connected to MCI Server at %s:%d\n", MCI_SERVER_IP, MCI_SERVER_PORT);
 
-    // Send a login request to MCI Server
-    omq_login login;
-    memset(&login, 0, sizeof(login));
-    login.hdr.tr_id = 1; // Transaction ID for login
-    strncpy(login.user_id, "example_user", sizeof(login.user_id) - 1);
-    strncpy(login.user_pw, "example_password", sizeof(login.user_pw) - 1);
-
-    if (send(client_sock, (void *)&login, sizeof(login), 0) == -1) {
-        perror("[OMS Client] Send failed");
-        close(client_sock);
-        exit(EXIT_FAILURE);
+    // TEST 성공
+    for(int i=0;i<100;i++){
+        send_login_request(client_sock, "hj", "1234"); // fail: 201
+        send_login_request(client_sock, "jina", "123"); // fail: 202
+        send_login_request(client_sock, "jina", "1234"); // success: 200
+        if(i% 10 == 0) usleep(500000);
     }
-
+    
     printf("[OMS Client] Login request sent to MCI Server\n");
 
     // Handle server responses

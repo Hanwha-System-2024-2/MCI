@@ -1,7 +1,7 @@
 # Compiler and flags
 CC = gcc
 CFLAGS = -Iinclude -I$(NETWORK_DIR) -I. -Wall -Wextra -O2
-LDFLAGS =
+LDFLAGS = -lmysqlclient
 
 # Directories
 INCLUDE_DIR = include

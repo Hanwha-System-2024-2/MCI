@@ -14,4 +14,9 @@
 #define MCI_SERVER_IP "127.0.0.1"
 #define MCI_SERVER_PORT 8081
 
+#define MYSQL_HOST "127.0.0.1"
+#define MYSQL_USER "root"
+#define MYSQL_PASSWORD "1234" 
+#define MYSQL_DBNAME "mydb"
+
 #endif

@@ -10,6 +10,9 @@
 #include "krx_network.h"
 #include "oms_network.h"
 #include "env.h"
+#include <mysql/mysql.h>
+
+int connect_db(MYSQL *conn);
 
 int main() {
     int krx_sock, oms_sock;
@@ -91,7 +94,15 @@ int main() {
             close(pipe_krx_to_oms[1]);
             close(pipe_oms_to_krx[0]);
             close(oms_sock);
-            handle_oms(client_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
+
+            // db 연결
+            MYSQL *conn = mysql_init(NULL);
+            if(connect_db(conn) == 1){ // 성공
+                handle_oms(conn, client_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
+            }
+
+            mysql_close(conn);
+            
             close(client_sock);
             exit(0);
         } else if (oms_pid < 0) {
@@ -109,4 +120,13 @@ int main() {
     close(oms_sock);
 
     return 0;
+}
+
+int connect_db(MYSQL *conn){
+    if (!mysql_real_connect(conn, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DBNAME, 0, NULL, 0)) {
+        fprintf(stderr, "MySQL connection failed: %s\n", mysql_error(conn));
+        return -1;
+    }
+
+    return 1;
 }
