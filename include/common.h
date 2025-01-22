@@ -19,22 +19,22 @@ typedef struct  {
 
 // 단일 시세 구조체
 typedef struct {
-  char stock_code[6];       // 종목코드
-  char stock_name[50];      // 종목명
-  float price;              // 시세(현재가)
+  char stock_code[7];       // 종목코드
+  char stock_name[51];      // 종목명
+  int price;              // 시세(현재가)
   long volume;              // 거래량
   int change;               // 대비
   char rate_of_change[10];  // 등락률
   hoga hoga[2];             // 호가
   int high_price;           // 고가
   int low_price;            // 저가
-  char market_time[18];     // 시세 형성 시간
+  char market_time[19];     // 시세 형성 시간
 } current_market_price;
 
 // 종목 정보 구조체
 typedef struct {
-   char stock_code[6];
-   char stock_name[50];
+   char stock_code[7];
+   char stock_name[51];
 } stock_info;
 
 /* tr_id */
