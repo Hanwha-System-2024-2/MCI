@@ -22,8 +22,8 @@ void send_data(int client_socket) {
     kmt_current_market_prices data;
 
     // 데이터 초기화
-    data.header.tr_id = 8;
-    data.header.length = sizeof(data);
+    data.hdr.tr_id = 8;
+    data.hdr.length = sizeof(data);
 
     // 데이터 예시
     for (int i = 0; i < 4; i++) {
