@@ -199,10 +199,18 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                 ssize_t bytes_received = recv(krx_sock, krx_buffer + krx_buffer_offset, BUFFER_SIZE - krx_buffer_offset, 0);
                 if (bytes_received <= 0)
                 {
-                    perror("[KRX-Socket] Failed to receive data");
+                    if (bytes_received == 0)
+                    {
+                        printf("[KRX-Socket] Connection closed by KRX server.\n");
+                    }
+                    else
+                    {
+                        perror("[KRX-Socket] Failed to receive data");
+                    }
                     break;
                 }
 
+                // 받은 데이터 크기만큼 offset을 설정
                 krx_buffer_offset += bytes_received;
 
                 // 버퍼 내 데이터 처리
@@ -212,9 +220,9 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                     hdr *header = (hdr *)krx_buffer;
                     size_t total_length = header->length;
 
+                    // 데이터가 부족하면 다음 수신을 기다림
                     if (krx_buffer_offset < total_length)
                     {
-                        // 데이터가 부족하면 다음 수신을 기다림
                         break;
                     }
 
@@ -233,7 +241,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                     case KMT_STOCK_INFOS:
                     {
                         void *request_data = malloc(header->length);
-                        memcpy(request_data, krx_buffer + sizeof(hdr), header->length);
+                        memcpy(request_data, krx_buffer, header->length);
 
                         pthread_t request_thread;
                         if (pthread_create(&request_thread, NULL, handle_stock_infos, request_data) != 0)
@@ -278,11 +286,11 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                 {
                     // 헤더 파싱
                     hdr *header = (hdr *)pipe_buffer;
-                    size_t total_length = sizeof(hdr) + header->length;
+                    size_t total_length = header->length;
 
+                    // 데이터가 부족하면 다음 수신을 기다림
                     if (pipe_buffer_offset < total_length)
                     {
-                        // 데이터가 부족하면 다음 수신을 기다림
                         break;
                     }
 
