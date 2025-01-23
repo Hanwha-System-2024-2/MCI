@@ -15,19 +15,23 @@
 int connect_db(MYSQL *conn);
 
 int main() {
-    int krx_sock, oms_sock;
+        int krx_sock, oms_sock;
     struct sockaddr_in krx_addr, oms_addr, client_addr;
     socklen_t client_len;
 
     // krx, oms 프로세스 간 통신을 위한 pipe
     int pipe_krx_to_oms[2];
     int pipe_oms_to_krx[2];
-    if (pipe(pipe_krx_to_oms) == -1 || pipe(pipe_oms_to_krx) == -1) {
+    
+    if (pipe(pipe_krx_to_oms) == -1 || pipe(pipe_oms_to_krx) == -1)
+    {
         perror("Failed to create pipes");
         exit(EXIT_FAILURE);
     }
 
-    if ((krx_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    // mci와 krx 소켓 통신
+    if ((krx_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    {
         perror("KRX socket creation failed");
         exit(EXIT_FAILURE);
     }
@@ -36,20 +40,30 @@ int main() {
     krx_addr.sin_port = htons(KRX_SERVER_PORT);
     krx_addr.sin_addr.s_addr = inet_addr(KRX_SERVER_IP);
 
-    if (connect(krx_sock, (struct sockaddr *)&krx_addr, sizeof(krx_addr)) == -1) {
+    if (connect(krx_sock, (struct sockaddr *)&krx_addr, sizeof(krx_addr)) == -1)
+    {
         perror("KRX connection failed");
         close(krx_sock);
         exit(EXIT_FAILURE);
     }
-
+    /*  
+        부모 -> 자식 프로세스(>0)를 반환
+        자식 -> 0을 반환
+        KRX 프로세스 생성 
+    */
     pid_t krx_pid = fork();
     if (krx_pid == 0) {
-        close(pipe_krx_to_oms[0]); 
-        close(pipe_oms_to_krx[1]); 
-        handle_kmt_price(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
-    } else if (krx_pid < 0) {
-        perror("Fork for KRX failed");
-        close(krx_sock);
+        // 자식 프로세스: KRX와 연결을 담당
+        close(pipe_krx_to_oms[0]); // 읽기 끝 닫기
+        close(pipe_oms_to_krx[1]); // 쓰기 끝 닫기
+        handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]); // KRX 데이터 처리
+        exit(EXIT_SUCCESS); // 자식 프로세스 종료
+    } else if (krx_pid > 0) {
+        // 부모 프로세스: 자식 프로세스 생성 성공
+        printf("KRX process forked successfully. PID: %d\n", krx_pid);
+    } else {
+        // fork 실패 처리
+        perror("Failed to fork KRX process");
         exit(EXIT_FAILURE);
     }
 
