@@ -8,11 +8,20 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <pthread.h>
+#include <mqueue.h>
 #include "krx_network.h"
 #include "oms_network.h"
 
 #include <sys/epoll.h>
 
+#include <mqueue.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+#define MQ_NAME "/kmt_market_price_queue"
+#define MQ_MAX_MSG 10
+#define MQ_MSG_SIZE sizeof(kmt_current_market_prices)
 #define MAX_EVENTS 2     // 최대 감시 파일 디스크립터 개수
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
 
@@ -47,60 +56,54 @@ void print_kmt_current_market_prices(kmt_current_market_prices *data)
 
 void *handle_current_market_price(void *arg)
 {
-    int *args = (int *)arg;
-    int krx_sock = args[0];
-    int pipe_write = args[1];
-    kmt_current_market_prices market_price;
-    mot_market_price transformed;
+    int pipe_write = *(int *)arg;
+
+    // Message Queue 열기
+    mqd_t mq = mq_open(MQ_NAME, O_RDONLY);
+    if (mq == (mqd_t)-1)
+    {
+        perror("[Market Price Thread] Failed to open message queue");
+        pthread_exit(NULL);
+    }
 
     while (1)
     {
-        printf("[Market Price Thread] Waiting for data from KRX...\n");
-        // KRX에서 시세 데이터 수신
-        ssize_t bytes_received = recv(krx_sock, &market_price, sizeof(market_price), 0);
-        printf("[Market Price Thread] Received market data from KRX. Total Length: %ld bytes\n", bytes_received);
+        kmt_current_market_prices received_data;
 
-        if (bytes_received <= 0)
+        // Message Queue에서 데이터 읽기
+        ssize_t bytes_read = mq_receive(mq, (char *)&received_data, MQ_MSG_SIZE, NULL);
+        if (bytes_read == -1)
         {
-            if (bytes_received == 0)
-            {
-                printf("[Market Price Thread] Connection closed by KRX server.\n");
-            }
-            else
-            {
-                perror("[Market Price Thread] Failed to receive data");
-            }
-            break;
+            perror("[Market Price Thread] Failed to receive from message queue");
+            continue;
         }
 
-        printf("[KRX] Received Data:\n");
-        print_kmt_current_market_prices(&market_price); // 디버깅용 출력
+        print_kmt_current_market_prices(&received_data);
+        printf("[Market Price Thread] Received data from message queue.\n");
 
-        // 데이터 변환: kmt_current_market_prices -> mot_current_market_price
-        transformed.hdr.tr_id = MOT_CURRENT_MARKET_PRICE;
-        transformed.hdr.length = market_price.hdr.length;
+        // 데이터를 mot_market_price로 변환
+        mot_market_price transformed_data;
+        transformed_data.hdr.tr_id = MOT_CURRENT_MARKET_PRICE;
+        transformed_data.hdr.length = received_data.hdr.length;
         for (int i = 0; i < 4; i++)
         {
-            transformed.body[i] = market_price.body[i]; // body 배열 복사
+            transformed_data.body[i] = received_data.body[i];
         }
 
         printf("[Market Price Thread] Data transformed successfully.\n");
 
-        // 변환된 데이터를 MCI 내부 다른 프로세스에 전송
-        if (write(pipe_write, &transformed, sizeof(transformed)) == -1)
+        // 파이프로 전송
+        if (write(pipe_write, &transformed_data, sizeof(transformed_data)) == -1)
         {
             perror("[Market Price Thread] Failed to write to pipe");
         }
         else
         {
-            printf("[Market Price Thread] Wrote transformed data to pipe.\n");
+            printf("[Market Price Thread] Data sent to pipe successfully.\n");
         }
-
-        printf("[Market Price Thread] Transformed data sent to pipe successfully.\n");
     }
 
-    close(krx_sock);
-    free(args);
+    mq_close(mq);
     pthread_exit(NULL);
 }
 
@@ -120,27 +123,32 @@ void *handle_stock_infos(void *arg)
 // krx_sock 기반으로 데이터 판단해서 처리 진행
 void handle_krx(int krx_sock, int pipe_write, int pipe_read)
 {
-    pthread_t market_thread;
-    static int market_thread_initialized = 0;
+    // Message Queue 생성
+    struct mq_attr attr = {0};
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = MQ_MAX_MSG;
+    attr.mq_msgsize = MQ_MSG_SIZE;
+    attr.mq_curmsgs = 0;
 
-    // 고정된 시세 처리 쓰레드 초기화
-    if (!market_thread_initialized)
+    mqd_t mq = mq_open(MQ_NAME, O_CREAT | O_RDWR, 0644, &attr);
+    if (mq == (mqd_t)-1)
     {
-        int *args = malloc(2 * sizeof(int));
-        args[0] = krx_sock;
-        args[1] = pipe_write;
-
-        if (pthread_create(&market_thread, NULL, handle_current_market_price, args) != 0)
-        {
-            perror("Failed to create market price thread");
-            free(args);
-            exit(EXIT_FAILURE);
-        }
-
-        pthread_detach(market_thread); // 쓰레드 자동 해제
-        market_thread_initialized = 1;
-        printf("[KRX] Fixed market price thread initialized.\n"); // ?
+        perror("[KRX] Failed to create message queue");
+        exit(EXIT_FAILURE);
     }
+
+    // 고정 스레드 생성
+    pthread_t market_thread;
+
+    if (pthread_create(&market_thread, NULL, handle_current_market_price, &pipe_write) != 0)
+    {
+        perror("[KRX] Failed to create market price thread");
+        mq_close(mq);
+        mq_unlink(MQ_NAME);
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_detach(market_thread);
 
     // epoll 관측 구간
     int epoll_fd, nfds;
@@ -234,7 +242,15 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                     {
                     case KMT_CURRENT_MARKET_PRICES:
                     {
-                        printf("[KRX-Socket] Market price request handled by fixed thread.\n");
+                        // Message Queue에 데이터 추가
+                        if (mq_send(mq, krx_buffer, total_length, 0) == -1)
+                        {
+                            perror("[KRX-Socket] Failed to send data to message queue");
+                        }
+                        else
+                        {
+                            printf("[KRX-Socket] Data sent to message queue.\n");
+                        }
                         break;
                     }
 
@@ -317,6 +333,9 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
         }
     }
 
+    mq_close(mq);
+    mq_unlink(MQ_NAME);
+    close(krx_sock);
     close(epoll_fd);
     close(krx_sock);
     close(pipe_read);
