@@ -16,7 +16,7 @@ void send_login_request(int client_sock, const char *user_id, const char *user_p
     memset(&login, 0, sizeof(login));
 
     login.hdr.tr_id = 1; // omq_login
-    login.hdr.length = 108; // 길이
+    login.hdr.length = 108; // 길이 : 108
     strncpy(login.user_id, user_id, sizeof(login.user_id) - 1);
     strncpy(login.user_pw, user_pw, sizeof(login.user_pw) - 1);
 
@@ -51,7 +51,7 @@ void handle_server_response(int server_sock) {
 
             if (header->tr_id == MOT_LOGIN) {
                 mot_login *login = (mot_login *)(buffer + processed_bytes);
-                printf("[OMS Client] Login Response: tr_id: %d, status code: %d\n", login->hdr.tr_id, login->status_code);
+                printf("[OMS Client] Login Response: tr_id: %d, status code: %d, user_id: %s\n", login->hdr.tr_id, login->status_code, login->user_id);
             } else {
                 printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
             }
@@ -88,7 +88,7 @@ void start_oms_client() {
     printf("[OMS Client] Connected to MCI Server at %s:%d\n", MCI_SERVER_IP, MCI_SERVER_PORT);
 
     // TEST 성공
-    for(int i=0;i<100;i++){
+    for(int i=0;i<1;i++){
         send_login_request(client_sock, "hj", "1234"); // fail: 201
         send_login_request(client_sock, "jina", "123"); // fail: 202
         send_login_request(client_sock, "jina", "1234"); // success: 200

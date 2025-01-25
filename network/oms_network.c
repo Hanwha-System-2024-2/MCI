@@ -139,7 +139,7 @@ void handle_omq_login(omq_login *data, int oms_sock, MYSQL *conn) {
 
     int status_code = validate_user_credentials(conn, data->user_id, data->user_pw);
 
-    send_login_response(oms_sock, status_code);
+    send_login_response(oms_sock, data->user_id, status_code);
 }
 
 void handle_omq_stocks(omq_stocks *data, int pipe_write) {
@@ -206,10 +206,11 @@ int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user
     return status_code;
 }
 
-void send_login_response(int oms_sock, int status_code) {
+void send_login_response(int oms_sock,char *user_id, int status_code) {
     mot_login response;
     response.hdr.tr_id = MOT_LOGIN;
-    response.hdr.length = sizeof(mot_login);
+    response.hdr.length = sizeof(mot_login); // // 62 + 2(패딩)
+    strncpy(response.user_id, user_id, sizeof(response.user_id) - 1);
     response.status_code = status_code;
 
     if (send(oms_sock, &response, sizeof(response), 0) == -1) {

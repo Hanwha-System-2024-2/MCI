@@ -12,6 +12,7 @@ typedef struct {
 
 typedef struct {
     hdr hdr;
+    char user_id[50];
     int status_code;
 } mot_login;
 
@@ -39,7 +40,7 @@ void handle_omq_stocks(omq_stocks *data, int pipe_write);
 void handle_mot_stocks(mot_stocks *data, int oms_sock);
 void handle_omq_market_price(omq_market_price *data, int pipe_write);
 void handle_mot_market_price(mot_market_price *data, int oms_sock);
-void send_login_response(int oms_sock, int status_code);
+void send_login_response(int oms_sock,char *user_id, int status_code);
 int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user_pw);
 
 #endif
