@@ -9,7 +9,7 @@
 #include "env.h"
 #include "./network/oms_network.h"
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 8192
 
 void send_login_request(int client_sock, const char *user_id, const char *user_pw) {
     omq_login login;
@@ -21,13 +21,41 @@ void send_login_request(int client_sock, const char *user_id, const char *user_p
     strncpy(login.user_pw, user_pw, sizeof(login.user_pw) - 1);
 
     if (send(client_sock, (void *)&login, sizeof(login), 0) == -1) {
-        perror("[OMS Client] Send failed");
+        perror("[OMS Client] Send login request failed");
         close(client_sock);
         exit(EXIT_FAILURE);
     }
 
     printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
 }
+
+void send_hisotry_request(int client_sock, const char *user_id){
+    omq_tx_history history;
+
+    history.hdr.tr_id = 12;
+    history.hdr.length = sizeof(omq_tx_history);
+    strncpy(history.user_id, user_id, sizeof(history.user_id) - 1);
+
+    if (send(client_sock, (void *)&history, sizeof(history), 0) == -1) {
+        perror("[OMS Client] Send history request failed");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void print_tx(transaction *tx, int i){
+    printf("Transaction %d: ", i + 1);
+    // printf("  Stock Code: %s\n", tx->stock_code);
+    // printf("  Stock Name: %s\n", tx->stock_name);
+    // printf("  Transaction Code: %s\n", tx->tx_code);
+    // printf("  User ID: %s\n", tx->user_id);
+    // printf("  Order Type: %c\n", tx->order_type);
+    // printf("  Quantity: %d\n", tx->quantity);
+    printf("  Date/Time: %s\n", tx->datetime);
+    // printf("  Price: %d\n", tx->price);
+    // printf("  Status: %c\n", tx->status);
+}
+
 void handle_server_response(int server_sock) {
     char buffer[BUFFER_SIZE];
     size_t buffer_offset = 0;
@@ -44,7 +72,7 @@ void handle_server_response(int server_sock) {
         size_t processed_bytes = 0;
         while (processed_bytes + sizeof(hdr) <= buffer_offset) {
             hdr *header = (hdr *)(buffer + processed_bytes);
-
+            printf("header->length: %d\n",header->length);
             if (processed_bytes + header->length > buffer_offset) {
                 break;
             }
@@ -52,9 +80,22 @@ void handle_server_response(int server_sock) {
             if (header->tr_id == MOT_LOGIN) {
                 mot_login *login = (mot_login *)(buffer + processed_bytes);
                 printf("[OMS Client] Login Response: tr_id: %d, status code: %d, user_id: %s\n", login->hdr.tr_id, login->status_code, login->user_id);
-            } else {
-                printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
             }
+            else if(header->tr_id == MOT_TX_HISTORY){
+                mot_tx_history *history = (mot_tx_history *)(buffer + processed_bytes);
+                printf("[OMS Client] TX_history Response\n");
+
+                for (int i = 0; i < 50; i++) {
+                    transaction *tx = &history->tx_history[i];
+
+                    if (tx->stock_code[0] == '\0') {
+                        continue;
+                    }
+
+                    print_tx(tx, i);
+                }
+            }
+            else printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
 
             processed_bytes += header->length;
         }
@@ -89,13 +130,14 @@ void start_oms_client() {
 
     // TEST 성공
     for(int i=0;i<1;i++){
-        send_login_request(client_sock, "hj", "1234"); // fail: 201
-        send_login_request(client_sock, "jina", "123"); // fail: 202
+        // send_login_request(client_sock, "hj", "1234"); // fail: 201
+        // send_login_request(client_sock, "jina", "123"); // fail: 202
         send_login_request(client_sock, "jina", "1234"); // success: 200
+        send_hisotry_request(client_sock, "jina");
         if(i% 10 == 0) usleep(500000);
     }
     
-    printf("[OMS Client] Login request sent to MCI Server\n");
+    printf("[OMS Client] Request sent to MCI Server\n");
 
     // Handle server responses
     handle_server_response(client_sock);
