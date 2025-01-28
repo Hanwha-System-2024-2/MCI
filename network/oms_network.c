@@ -91,6 +91,9 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
                         case OMQ_LOGIN:
                             handle_omq_login((omq_login *)body, oms_sock, conn);
                             break;
+                        case OMQ_TX_HISTORY:
+                            handle_omq_tx_history((omq_tx_history *) body, oms_sock, conn);
+                            break;
                         case OMQ_STOCK_INFOS:
                             handle_omq_stocks((omq_stocks *)body, pipe_write);
                             break;
@@ -139,8 +142,74 @@ void handle_omq_login(omq_login *data, int oms_sock, MYSQL *conn) {
 
     int status_code = validate_user_credentials(conn, data->user_id, data->user_pw);
 
-    send_login_response(oms_sock, status_code);
+    send_login_response(oms_sock, data->user_id, status_code);
 }
+
+void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
+    printf("[OMQ_TX_HISTORY] request id: %s\n", data->user_id);
+
+    char query[512];
+    snprintf(query, sizeof(query),
+             "SELECT stock_code, stock_name, transaction_code, user_id, order_type, quantity, "
+             "DATE_FORMAT(order_time, '%%Y%%m%%d%%H%%i%%s') AS datetime, price, status "
+             "FROM tx_history "
+             "WHERE user_id = '%s' "
+             "LIMIT 50", data->user_id);
+
+    if (mysql_query(conn, query)) {
+        fprintf(stderr, "[handle_omq_tx_history] Query failed: %s\n", mysql_error(conn));
+        return;
+    }
+
+    MYSQL_RES *result = mysql_store_result(conn);
+    if (!result) {
+        fprintf(stderr, "[handle_omq_tx_history] Failed to store result: %s\n", mysql_error(conn));
+        return;
+    }
+
+    mot_tx_history response = {0};
+    response.hdr.tr_id = 13;
+    
+    int row_count = 0;
+    MYSQL_ROW row;
+
+    while ((row = mysql_fetch_row(result)) && row_count < 50) {
+        strncpy(response.tx_history[row_count].stock_code, row[0], sizeof(response.tx_history[row_count].stock_code) - 1);
+        response.tx_history[row_count].stock_code[sizeof(response.tx_history[row_count].stock_code) - 1] = '\0';
+
+        strncpy(response.tx_history[row_count].stock_name, row[1], sizeof(response.tx_history[row_count].stock_name) - 1);
+        response.tx_history[row_count].stock_name[sizeof(response.tx_history[row_count].stock_name) - 1] = '\0';
+
+        strncpy(response.tx_history[row_count].tx_code, row[2], sizeof(response.tx_history[row_count].tx_code) - 1);
+        response.tx_history[row_count].tx_code[sizeof(response.tx_history[row_count].tx_code) - 1] = '\0';
+
+        strncpy(response.tx_history[row_count].user_id, row[3], sizeof(response.tx_history[row_count].user_id) - 1);
+        response.tx_history[row_count].user_id[sizeof(response.tx_history[row_count].user_id) - 1] = '\0';
+
+        response.tx_history[row_count].order_type = row[4][0];
+        response.tx_history[row_count].quantity = atoi(row[5]);
+
+        strncpy(response.tx_history[row_count].datetime, row[6], sizeof(response.tx_history[row_count].datetime) - 1);
+        response.tx_history[row_count].datetime[sizeof(response.tx_history[row_count].datetime) - 1] = '\0';
+
+        response.tx_history[row_count].price = atoi(row[7]);
+        response.tx_history[row_count].status = row[8][0];
+
+        row_count++;
+    }
+
+    response.hdr.length = sizeof(response);
+
+    // Send the response to the OMS
+    if (send(oms_sock, &response, sizeof(response), 0) == -1) {
+        perror("[handle_omq_tx_history] Failed to send response to OMS");
+    } else {
+        printf("[handle_omq_tx_history]: Sent %d transaction records to OMS\n", row_count);
+    }
+
+    mysql_free_result(result);
+}
+
 
 void handle_omq_stocks(omq_stocks *data, int pipe_write) {
     printf("[OMQ_STOCKS] Forwarding request to KRX process\n");
@@ -206,10 +275,11 @@ int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user
     return status_code;
 }
 
-void send_login_response(int oms_sock, int status_code) {
+void send_login_response(int oms_sock,char *user_id, int status_code) {
     mot_login response;
     response.hdr.tr_id = MOT_LOGIN;
-    response.hdr.length = sizeof(mot_login);
+    response.hdr.length = sizeof(mot_login); // // 62 + 2(패딩)
+    strncpy(response.user_id, user_id, sizeof(response.user_id) - 1);
     response.status_code = status_code;
 
     if (send(oms_sock, &response, sizeof(response), 0) == -1) {

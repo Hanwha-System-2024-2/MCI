@@ -13,67 +13,53 @@
 #include <mysql/mysql.h>
 
 int connect_db(MYSQL *conn);
+int connect_to_krx();
+void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]);
+void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]);
 
 int main() {
-        int krx_sock, oms_sock;
-    struct sockaddr_in krx_addr, oms_addr, client_addr;
-    socklen_t client_len;
-
-    // krx, oms 프로세스 간 통신을 위한 pipe
     int pipe_krx_to_oms[2];
     int pipe_oms_to_krx[2];
-    
-    if (pipe(pipe_krx_to_oms) == -1 || pipe(pipe_oms_to_krx) == -1)
-    {
+
+    if (pipe(pipe_krx_to_oms) == -1 || pipe(pipe_oms_to_krx) == -1) {
         perror("Failed to create pipes");
         exit(EXIT_FAILURE);
     }
 
-    // mci와 krx 소켓 통신
-    if ((krx_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("KRX socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    krx_addr.sin_family = AF_INET;
-    krx_addr.sin_port = htons(KRX_SERVER_PORT);
-    krx_addr.sin_addr.s_addr = inet_addr(KRX_SERVER_IP);
-
-    if (connect(krx_sock, (struct sockaddr *)&krx_addr, sizeof(krx_addr)) == -1)
-    {
-        perror("KRX connection failed");
-        close(krx_sock);
-        exit(EXIT_FAILURE);
-    }
-    /*  
-        부모 -> 자식 프로세스(>0)를 반환
-        자식 -> 0을 반환
-        KRX 프로세스 생성 
-    */
     pid_t krx_pid = fork();
     if (krx_pid == 0) {
-        // 자식 프로세스: KRX와 연결을 담당
-        close(pipe_krx_to_oms[0]); // 읽기 끝 닫기
-        close(pipe_oms_to_krx[1]); // 쓰기 끝 닫기
-        handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]); // KRX 데이터 처리
-        exit(EXIT_SUCCESS); // 자식 프로세스 종료
+        // KRX 클라이언트 실행
+        run_krx_client(pipe_krx_to_oms, pipe_oms_to_krx);
+        exit(EXIT_SUCCESS);
     } else if (krx_pid > 0) {
-        // 부모 프로세스: 자식 프로세스 생성 성공
-        printf("KRX process forked successfully. PID: %d\n", krx_pid);
+        // OMS 서버 실행
+        run_oms_server(pipe_krx_to_oms, pipe_oms_to_krx);
     } else {
-        // fork 실패 처리
         perror("Failed to fork KRX process");
         exit(EXIT_FAILURE);
     }
 
+    close(pipe_krx_to_oms[0]);
+    close(pipe_krx_to_oms[1]);
+    close(pipe_oms_to_krx[0]);
+    close(pipe_oms_to_krx[1]);
+
+    return 0;
+}
+
+void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
+    int oms_sock;
+    struct sockaddr_in oms_addr, client_addr;
+    socklen_t client_len;
+
+    // OMS 소켓 설정
     if ((oms_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("OMS socket creation failed");
         exit(EXIT_FAILURE);
     }
 
     oms_addr.sin_family = AF_INET;
-    oms_addr.sin_port = htons(MCI_SERVER_PORT); // OMS 수신용 포트
+    oms_addr.sin_port = htons(MCI_SERVER_PORT);
     oms_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(oms_sock, (struct sockaddr *)&oms_addr, sizeof(oms_addr)) == -1) {
@@ -104,43 +90,70 @@ int main() {
 
         pid_t oms_pid = fork();
         if (oms_pid == 0) {
-            // 자식 프로세스: 클라이언트와 통신 처리
+            // 자식 프로세스: OMS 클라이언트 통신 처리
             close(pipe_krx_to_oms[1]);
             close(pipe_oms_to_krx[0]);
             close(oms_sock);
 
-            // db 연결
             MYSQL *conn = mysql_init(NULL);
-            if(connect_db(conn) == 1){ // 성공
+            if (connect_db(conn) == 1) {
                 handle_oms(conn, client_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
             }
 
             mysql_close(conn);
-            
             close(client_sock);
             exit(0);
         } else if (oms_pid < 0) {
             perror("Fork for OMS failed");
-            close(client_sock);
         }
 
         close(client_sock);
     }
 
-    close(pipe_krx_to_oms[0]);
-    close(pipe_krx_to_oms[1]);
-    close(pipe_oms_to_krx[0]);
-    close(pipe_oms_to_krx[1]);
     close(oms_sock);
-
-    return 0;
 }
 
-int connect_db(MYSQL *conn){
+void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
+    while (1) {
+        int krx_sock = connect_to_krx();
+        if (krx_sock != -1) {
+            printf("[KRX Process] Connected to KRX server.\n");
+
+            close(pipe_krx_to_oms[0]);
+            close(pipe_oms_to_krx[1]);
+            handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
+            close(krx_sock);
+        }
+        sleep(5); // 5초마다 재연결
+    }
+}
+
+int connect_db(MYSQL *conn) {
     if (!mysql_real_connect(conn, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DBNAME, 0, NULL, 0)) {
         fprintf(stderr, "MySQL connection failed: %s\n", mysql_error(conn));
         return -1;
     }
 
     return 1;
+}
+
+int connect_to_krx() {
+    int krx_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (krx_sock == -1) {
+        perror("KRX socket creation failed");
+        return -1;
+    }
+
+    struct sockaddr_in krx_addr;
+    krx_addr.sin_family = AF_INET;
+    krx_addr.sin_port = htons(KRX_SERVER_PORT);
+    krx_addr.sin_addr.s_addr = inet_addr(KRX_SERVER_IP);
+
+    if (connect(krx_sock, (struct sockaddr *)&krx_addr, sizeof(krx_addr)) == -1) {
+        perror("KRX connection failed");
+        close(krx_sock);
+        return -1;
+    }
+
+    return krx_sock;
 }

@@ -46,6 +46,8 @@ typedef struct {
 #define MOT_LOGIN 4
 #define MOT_STOCK_INFOS 5
 #define MOT_CURRENT_MARKET_PRICE 6
+#define OMQ_TX_HISTORY 12
+#define MOT_TX_HISTORY 13
 
 // KRX - MCI 관련
 #define KMT_STOCK_INFOS 7
