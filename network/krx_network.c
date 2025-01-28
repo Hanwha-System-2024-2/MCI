@@ -25,14 +25,12 @@
 #define MAX_EVENTS 2     // 최대 감시 파일 디스크립터 개수
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
 
-void print_kmt_current_market_prices(kmt_current_market_prices *data)
-{
+void print_kmt_current_market_prices(kmt_current_market_prices *data) {
     printf("Transaction ID: %d\n", data->hdr.tr_id);
     printf("Length: %d bytes\n", data->hdr.length);
     printf("=== Market Prices ===\n");
 
-    for (int i = 0; i < 4; i++)
-    {
+    for (int i = 0; i < 4; i++) {
         printf("\n[Stock %d]\n", i + 1);
         printf("Stock Code: %s\n", data->body[i].stock_code);
         printf("Stock Name: %s\n", data->body[i].stock_name);
@@ -54,26 +52,22 @@ void print_kmt_current_market_prices(kmt_current_market_prices *data)
     }
 }
 
-void *handle_current_market_price(void *arg)
-{
+void *handle_current_market_price(void *arg) {
     int pipe_write = *(int *)arg;
 
     // Message Queue 열기
     mqd_t mq = mq_open(MQ_NAME, O_RDONLY);
-    if (mq == (mqd_t)-1)
-    {
+    if (mq == (mqd_t)-1) {
         perror("[Market Price Thread] Failed to open message queue");
         pthread_exit(NULL);
     }
 
-    while (1)
-    {
+    while (1) {
         kmt_current_market_prices received_data;
 
         // Message Queue에서 데이터 읽기
         ssize_t bytes_read = mq_receive(mq, (char *)&received_data, MQ_MSG_SIZE, NULL);
-        if (bytes_read == -1)
-        {
+        if (bytes_read == -1) {
             perror("[Market Price Thread] Failed to receive from message queue");
             continue;
         }
@@ -85,20 +79,16 @@ void *handle_current_market_price(void *arg)
         mot_market_price transformed_data;
         transformed_data.hdr.tr_id = MOT_CURRENT_MARKET_PRICE;
         transformed_data.hdr.length = received_data.hdr.length;
-        for (int i = 0; i < 4; i++)
-        {
+        for (int i = 0; i < 4; i++) {
             transformed_data.body[i] = received_data.body[i];
         }
 
         printf("[Market Price Thread] Data transformed successfully.\n");
 
         // 파이프로 전송
-        if (write(pipe_write, &transformed_data, sizeof(transformed_data)) == -1)
-        {
+        if (write(pipe_write, &transformed_data, sizeof(transformed_data)) == -1) {
             perror("[Market Price Thread] Failed to write to pipe");
-        }
-        else
-        {
+        } else {
             printf("[Market Price Thread] Data sent to pipe successfully.\n");
         }
     }
@@ -107,8 +97,7 @@ void *handle_current_market_price(void *arg)
     pthread_exit(NULL);
 }
 
-void *handle_stock_infos(void *arg)
-{
+void *handle_stock_infos(void *arg) {
     kmt_stock_infos *data = (kmt_stock_infos *)arg;
 
     printf("[Thread] Processing stock infos...\n");
@@ -121,8 +110,7 @@ void *handle_stock_infos(void *arg)
 }
 
 // krx_sock 기반으로 데이터 판단해서 처리 진행
-void handle_krx(int krx_sock, int pipe_write, int pipe_read)
-{
+int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
     // Message Queue 생성
     struct mq_attr attr = {0};
     attr.mq_flags = 0;
@@ -131,8 +119,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     attr.mq_curmsgs = 0;
 
     mqd_t mq = mq_open(MQ_NAME, O_CREAT | O_RDWR, 0644, &attr);
-    if (mq == (mqd_t)-1)
-    {
+    if (mq == (mqd_t)-1) {
         perror("[KRX] Failed to create message queue");
         exit(EXIT_FAILURE);
     }
@@ -140,8 +127,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     // 고정 스레드 생성
     pthread_t market_thread;
 
-    if (pthread_create(&market_thread, NULL, handle_current_market_price, &pipe_write) != 0)
-    {
+    if (pthread_create(&market_thread, NULL, handle_current_market_price, &pipe_write) != 0) {
         perror("[KRX] Failed to create market price thread");
         mq_close(mq);
         mq_unlink(MQ_NAME);
@@ -159,8 +145,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     size_t pipe_buffer_offset = 0;
 
     // epoll 파일 디스크립터 생성
-    if ((epoll_fd = epoll_create1(0)) == -1)
-    {
+    if ((epoll_fd = epoll_create1(0)) == -1) {
         perror("epoll_create1 failed");
         exit(EXIT_FAILURE);
     }
@@ -168,8 +153,7 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     // KRX 소켓을 epoll에 추가
     ev.events = EPOLLIN;
     ev.data.fd = krx_sock;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, krx_sock, &ev) == -1)
-    {
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, krx_sock, &ev) == -1) {
         perror("epoll_ctl: krx_sock");
         exit(EXIT_FAILURE);
     }
@@ -177,60 +161,51 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     // 파이프 읽기 끝을 epoll에 추가
     ev.events = EPOLLIN;
     ev.data.fd = pipe_read;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pipe_read, &ev) == -1)
-    {
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pipe_read, &ev) == -1) {
         perror("epoll_ctl: pipe_read");
         exit(EXIT_FAILURE);
     }
 
     printf("[KRX] epoll initialized and monitoring started.\n");
 
-    while (1)
-    {
+    while (1) {
         // epoll 대기
         nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
-        if (nfds == -1)
-        {
+        if (nfds == -1) {
             perror("epoll_wait failed");
-            break;
+            return EXIT_FAILURE;
         }
 
         // 이벤트 처리
-        for (int i = 0; i < nfds; i++)
-        {
+        for (int i = 0; i < nfds; i++) {
             int fd = events[i].data.fd;
 
-            // KRX 소켓에서 데이터 수신
-            if (fd == krx_sock)
-            {
-                // 소켓에서 데이터 수신
+            
+            if (fd == krx_sock) { // KRX 소켓에서 데이터 수신
                 ssize_t bytes_received = recv(krx_sock, krx_buffer + krx_buffer_offset, BUFFER_SIZE - krx_buffer_offset, 0);
-                if (bytes_received <= 0)
-                {
-                    if (bytes_received == 0)
-                    {
-                        printf("[KRX-Socket] Connection closed by KRX server.\n");
-                    }
-                    else
-                    {
+                if (bytes_received <= 0) {
+                    if (bytes_received == 0) {
+                        printf("[KRX-Socket] Connection closed by KRX server. Notifying parent process...\n");
+                        close(krx_sock);
+                        // 연결 종료 상태를 부모 프로세스에 알림
+                        return EXIT_FAILURE;
+                    } else {
                         perror("[KRX-Socket] Failed to receive data");
+                        return EXIT_FAILURE;
                     }
-                    break;
                 }
 
                 // 받은 데이터 크기만큼 offset을 설정
                 krx_buffer_offset += bytes_received;
 
                 // 버퍼 내 데이터 처리
-                while (krx_buffer_offset >= sizeof(hdr))
-                {
+                while (krx_buffer_offset >= sizeof(hdr)) {
                     // 헤더 파싱
                     hdr *header = (hdr *)krx_buffer;
                     size_t total_length = header->length;
 
                     // 데이터가 부족하면 다음 수신을 기다림
-                    if (krx_buffer_offset < total_length)
-                    {
+                    if (krx_buffer_offset < total_length) {
                         break;
                     }
 
@@ -238,56 +213,44 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                     int tr_id = header->tr_id;
                     printf("[KRX-Socket] Received request with tr_id: %d, length: %d\n", tr_id, header->length);
 
-                    switch (tr_id)
-                    {
-                    case KMT_CURRENT_MARKET_PRICES:
-                    {
-                        // Message Queue에 데이터 추가
-                        if (mq_send(mq, krx_buffer, total_length, 0) == -1)
-                        {
-                            perror("[KRX-Socket] Failed to send data to message queue");
+                    switch (tr_id) {
+                        case KMT_CURRENT_MARKET_PRICES: {
+                            // Message Queue에 데이터 추가
+                            if (mq_send(mq, krx_buffer, total_length, 0) == -1) {
+                                perror("[KRX-Socket] Failed to send data to message queue");
+                            } else {
+                                printf("[KRX-Socket] Data sent to message queue.\n");
+                            }
+                            break;
                         }
-                        else
-                        {
-                            printf("[KRX-Socket] Data sent to message queue.\n");
+
+                        case KMT_STOCK_INFOS: {
+                            void *request_data = malloc(header->length);
+                            memcpy(request_data, krx_buffer, header->length);
+
+                            pthread_t request_thread;
+                            if (pthread_create(&request_thread, NULL, handle_stock_infos, request_data) != 0)
+                            {
+                                perror("[KRX-Socket] Failed to create dynamic thread for socket");
+                                free(request_data);
+                                continue;
+                            }
+                            pthread_detach(request_thread);
+                            break;
                         }
-                        break;
-                    }
 
-                    case KMT_STOCK_INFOS:
-                    {
-                        void *request_data = malloc(header->length);
-                        memcpy(request_data, krx_buffer, header->length);
-
-                        pthread_t request_thread;
-                        if (pthread_create(&request_thread, NULL, handle_stock_infos, request_data) != 0)
-                        {
-                            perror("[KRX-Socket] Failed to create dynamic thread for socket");
-                            free(request_data);
-                            continue;
-                        }
-                        pthread_detach(request_thread);
-                        break;
-                    }
-
-                    default:
-                        printf("[KRX-Socket] Unknown tr_id: %d\n", tr_id);
-                        break;
+                        default:
+                            printf("[KRX-Socket] Unknown tr_id: %d\n", tr_id);
+                            break;
                     }
 
                     // 처리된 데이터 제거
                     memmove(krx_buffer, krx_buffer + total_length, krx_buffer_offset - total_length);
                     krx_buffer_offset -= total_length;
                 }
-            }
-
-            // 파이프에서 데이터 수신
-            else if (fd == pipe_read)
-            {
-                // 파이프에서 데이터 수신
+            } else if (fd == pipe_read) { // 파이프에서 데이터 수신
                 ssize_t bytes_received = read(pipe_read, pipe_buffer + pipe_buffer_offset, BUFFER_SIZE - pipe_buffer_offset);
-                if (bytes_received <= 0)
-                {
+                if (bytes_received <= 0) {
                     if (bytes_received == 0)
                         printf("[KRX-Pipe] Pipe closed by writer (EOF).\n");
                     else
@@ -298,15 +261,13 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                 pipe_buffer_offset += bytes_received;
 
                 // 버퍼 내 데이터 처리
-                while (pipe_buffer_offset >= sizeof(hdr))
-                {
+                while (pipe_buffer_offset >= sizeof(hdr)) {
                     // 헤더 파싱
                     hdr *header = (hdr *)pipe_buffer;
                     size_t total_length = header->length;
 
                     // 데이터가 부족하면 다음 수신을 기다림
-                    if (pipe_buffer_offset < total_length)
-                    {
+                    if (pipe_buffer_offset < total_length) {
                         break;
                     }
 
@@ -314,15 +275,14 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
                     int tr_id = header->tr_id;
                     printf("[KRX-Pipe] Received request with tr_id: %d, length: %d\n", tr_id, header->length);
 
-                    switch (tr_id)
-                    {
-                    case KMT_STOCK_INFOS:
-                        printf("[KRX-Pipe] Wait. Not ready to take data.\n");
-                        break;
+                    switch (tr_id) {
+                        case KMT_STOCK_INFOS:
+                            printf("[KRX-Pipe] Wait. Not ready to take data.\n");
+                            break;
 
-                    default:
-                        printf("[KRX-Pipe] Unknown tr_id: %d\n", tr_id);
-                        break;
+                        default:
+                            printf("[KRX-Pipe] Unknown tr_id: %d\n", tr_id);
+                            break;
                     }
 
                     // 처리된 데이터 제거
@@ -339,4 +299,5 @@ void handle_krx(int krx_sock, int pipe_write, int pipe_read)
     close(epoll_fd);
     close(krx_sock);
     close(pipe_read);
+    return EXIT_SUCCESS;
 }

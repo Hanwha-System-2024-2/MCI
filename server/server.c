@@ -121,8 +121,12 @@ void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
 
             close(pipe_krx_to_oms[0]);
             close(pipe_oms_to_krx[1]);
-            handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
+            int status = handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
             close(krx_sock);
+
+            if (status == EXIT_FAILURE) {
+                printf("[KRX Process] Connection lost. Attempting to reconnect...\n");
+            }
         }
         sleep(5); // 5초마다 재연결
     }

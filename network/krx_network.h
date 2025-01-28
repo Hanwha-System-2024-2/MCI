@@ -16,6 +16,6 @@ typedef struct {
 } kmt_current_market_prices;
 
 
-void handle_krx(int krx_sock, int pipe_write, int pipe_read);
+int handle_krx(int krx_sock, int pipe_write, int pipe_read);
 
 #endif
