@@ -8,14 +8,25 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include "oms_network.h"
+#include "krx_network.h"
 #include <mysql/mysql.h>
+#include <pthread.h>
 #include "../include/common.h"
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 8192
 #define LOGIN_SUCCESS 200
 #define ID_NOT_FOUND 201
 #define PASSWORD_MISMATCH 202
 #define SERVER_ERROR 500
+#define MAX_CLIENTS 100
+
+// 클라이언트 소켓 관리
+int oms_clients[MAX_CLIENTS];
+int client_count = 0;
+pthread_mutex_t client_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+char buffer[BUFFER_SIZE];
+size_t buffer_offset = 0;
 
 void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
     int epoll_fd = epoll_create1(0);
@@ -24,9 +35,9 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
         exit(EXIT_FAILURE);
     }
 
-    struct epoll_event ev, events[2];
+    struct epoll_event ev, events[MAX_CLIENTS + 2];
     ev.events = EPOLLIN;
-
+    
     ev.data.fd = oms_sock;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, oms_sock, &ev) == -1) {
         perror("epoll_ctl: oms_sock");
@@ -39,11 +50,9 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
         exit(EXIT_FAILURE);
     }
 
-    char buffer[BUFFER_SIZE];
-    size_t buffer_offset = 0;
 
     while (1) {
-        int nfds = epoll_wait(epoll_fd, events, 2, -1);
+        int nfds = epoll_wait(epoll_fd, events, MAX_CLIENTS + 2, -1); 
         if (nfds == -1) {
             perror("epoll_wait");
             break;
@@ -52,19 +61,30 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
         for (int i = 0; i < nfds; ++i) {
             ssize_t len = 0;
 
-            if (events[i].data.fd == oms_sock) {
-                len = recv(oms_sock, buffer + buffer_offset, BUFFER_SIZE - buffer_offset, 0);
-                if (len == 0) {  // Client disconnected
-                    printf("[MCI Server] Client disconnected\n");
-                    close(oms_sock);
-                    oms_sock = -1;
+            if (events[i].data.fd == oms_sock) { // 새 클라이언트 연결 처리
+                struct sockaddr_in client_addr;
+                socklen_t client_len = sizeof(client_addr);
+                
+                int client_sock = accept(oms_sock, (struct sockaddr *)&client_addr, &client_len);
+                if (client_sock == -1) {
+                    perror("Accept failed");
                     continue;
                 }
-            } else if (events[i].data.fd == pipe_read) {
+
+                printf("[MCI Server] Client connected: %s:%d\n",
+                       inet_ntoa(client_addr.sin_addr),
+                       ntohs(client_addr.sin_port));
+
+                add_client(client_sock, epoll_fd);
+                
+            } else if (events[i].data.fd  == pipe_read) {
                 len = read(pipe_read, buffer + buffer_offset, BUFFER_SIZE - buffer_offset);
-            } else {
-                printf("[MCI Server] Unknown event source: fd = %d\n", events[i].data.fd);
-                continue;
+            } else { // 클라이언트 데이터 수신
+                len = recv(events[i].data.fd, buffer + buffer_offset, BUFFER_SIZE - buffer_offset, 0);
+                if (len <= 0) {
+                    remove_client(events[i].data.fd, epoll_fd);
+                    continue;
+                }
             }
 
             if (len < 0) {
@@ -86,13 +106,29 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
                 void *body = buffer + processed_bytes;
 
                 if (events[i].data.fd == oms_sock) {
+                    printf("[Connection]\n");
+                } else if (events[i].data.fd == pipe_read) {
+                    printf("[OMS-KRX -> OMS-MCI] event occurs\n");
+                    switch (header->tr_id) {
+                        case MOT_STOCK_INFOS:
+                            handle_mot_stocks((mot_stocks *)body);
+                            break;
+                        case MOT_CURRENT_MARKET_PRICE:
+                            handle_mot_market_price((mot_market_price *)body);
+                            break;
+                        default:
+                            printf("[ERROR] Unknown TR_ID from pipe: %d\n", header->tr_id);
+                            break;
+                    }
+                }
+                else{
                     printf("[OMS -> OMS-MCI] event occurs\n");
                     switch (header->tr_id) {
                         case OMQ_LOGIN:
-                            handle_omq_login((omq_login *)body, oms_sock, conn);
+                            handle_omq_login((omq_login *)body, events[i].data.fd, conn);
                             break;
                         case OMQ_TX_HISTORY:
-                            handle_omq_tx_history((omq_tx_history *) body, oms_sock, conn);
+                            handle_omq_tx_history((omq_tx_history *) body, events[i].data.fd, conn);
                             break;
                         case OMQ_STOCK_INFOS:
                             handle_omq_stocks((omq_stocks *)body, pipe_write);
@@ -102,19 +138,6 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
                             break;
                         default:
                             printf("[ERROR] Unknown TR_ID from OMS socket: %d\n", header->tr_id);
-                            break;
-                    }
-                } else if (events[i].data.fd == pipe_read) {
-                    printf("[OMS-KRX -> OMS-MCI] event occurs\n");
-                    switch (header->tr_id) {
-                        case MOT_STOCK_INFOS:
-                            handle_mot_stocks((mot_stocks *)body, oms_sock);
-                            break;
-                        case MOT_CURRENT_MARKET_PRICE:
-                            handle_mot_market_price((mot_market_price *)body, oms_sock);
-                            break;
-                        default:
-                            printf("[ERROR] Unknown TR_ID from pipe: %d\n", header->tr_id);
                             break;
                     }
                 }
@@ -213,18 +236,19 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 
 void handle_omq_stocks(omq_stocks *data, int pipe_write) {
     printf("[OMQ_STOCKS] Forwarding request to KRX process\n");
+    mkq_stock_infos stockInfo;
+    stockInfo.hdr.tr_id = MKQ_STOCK_INFOS;
+    stockInfo.hdr.length = data->hdr.length; 
 
-    if (write(pipe_write, data, sizeof(omq_stocks)) == -1) {
+    if (write(pipe_write, &stockInfo, sizeof(stockInfo)) == -1) {
         perror("[OMQ_STOCKS] Failed to write to pipe");
     }
 }
 
-void handle_mot_stocks(mot_stocks *data, int oms_sock) {
-    printf("[MOT_STOCKS] Forwarding stock info to OMS socket\n");
-
-    if (send(oms_sock, data, sizeof(mot_stocks), 0) == -1) {
-        perror("[MOT_STOCKS] Failed to send to OMS socket");
-    }
+void handle_mot_stocks(mot_stocks *data) {
+    printf("[MOT_STOCKS] Broadcasting stock info to all OMS clients\n");
+    
+    broadcast_to_clients(data, sizeof(mot_stocks));
 }
 
 void handle_omq_market_price(omq_market_price *data, int pipe_write) {
@@ -235,12 +259,10 @@ void handle_omq_market_price(omq_market_price *data, int pipe_write) {
     }
 }
 
-void handle_mot_market_price(mot_market_price *data, int oms_sock) {
-    printf("[MOT_MARKET_PRICE] Forwarding market price to OMS socket\n");
+void handle_mot_market_price(mot_market_price *data) {
+    printf("[MOT_MARKET_PRICE] Broadcasting market price to all OMS clients\n");
 
-    if (send(oms_sock, data, sizeof(mot_market_price), 0) == -1) {
-        perror("[MOT_MARKET_PRICE] Failed to send to OMS socket");
-    }
+    broadcast_to_clients(data, sizeof(mot_market_price));
 }
 
 int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user_pw) {
@@ -288,4 +310,52 @@ void send_login_response(int oms_sock,char *user_id, int status_code) {
     
     printf("[send_login_response]: status code:%d\n", status_code);
 
+}
+
+void add_client(int client_sock, int epoll_fd) {
+    pthread_mutex_lock(&client_list_mutex);
+    if (client_count < MAX_CLIENTS) {
+        oms_clients[client_count++] = client_sock;
+
+        struct epoll_event ev;
+        ev.events = EPOLLIN;
+        ev.data.fd = client_sock;
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_sock, &ev) == -1) {
+            perror("[add_client] epoll_ctl add failed");
+        } else {
+            printf("[add_client] Added client socket %d\n", client_sock);
+            printf("[add_client] Current OMS Client = %d\n",client_count);
+        }
+    } else {
+        printf("[add_client Failed] Max clients reached. Closing socket %d\n", client_sock);
+        close(client_sock);
+    }
+    pthread_mutex_unlock(&client_list_mutex);
+}
+
+void remove_client(int client_sock, int epoll_fd) {
+    pthread_mutex_lock(&client_list_mutex);
+    for (int i = 0; i < client_count; i++) {
+        if (oms_clients[i] == client_sock) {
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_sock, NULL);
+            close(client_sock);
+
+            oms_clients[i] = oms_clients[--client_count];
+            printf("[remove_client] Removed client socket %d\n", client_sock);
+            printf("[remove_client] Current OMS Client = %d\n",client_count);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&client_list_mutex);
+}
+
+void broadcast_to_clients(void *data, size_t data_size) {
+    pthread_mutex_lock(&client_list_mutex);
+    for (int i = 0; i < client_count; i++) {
+        if (send(oms_clients[i], data, data_size, 0) == -1) {
+            perror("[broadcast_to_clients] Failed to send to client");
+            remove_client(oms_clients[i], 0);
+        }
+    }
+    pthread_mutex_unlock(&client_list_mutex);
 }

@@ -59,11 +59,14 @@ typedef struct {
 void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read);
 void handle_omq_login(omq_login *data, int oms_sock, MYSQL *conn);
 void handle_omq_stocks(omq_stocks *data, int pipe_write);
-void handle_mot_stocks(mot_stocks *data, int oms_sock);
+void handle_mot_stocks(mot_stocks *data);
 void handle_omq_market_price(omq_market_price *data, int pipe_write);
-void handle_mot_market_price(mot_market_price *data, int oms_sock);
+void handle_mot_market_price(mot_market_price *data);
 void send_login_response(int oms_sock,char *user_id, int status_code);
 int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user_pw);
 void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn);
+void add_client(int client_sock, int epoll_fd);
+void remove_client(int client_sock, int epoll_fd);
+void broadcast_to_clients(void *data, size_t data_size);
 
 #endif
