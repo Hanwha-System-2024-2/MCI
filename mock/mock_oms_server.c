@@ -7,7 +7,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "env.h"
-#include "./network/oms_network.h"
+#include "../network/oms_network.h"
+#include "../network/krx_network.h"
+#include "../include/common.h"
 
 #define BUFFER_SIZE 8192
 
@@ -27,6 +29,22 @@ void send_login_request(int client_sock, const char *user_id, const char *user_p
     }
 
     printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
+}
+
+void send_stock_info_request(int client_sock) {
+    omq_stocks stockInfo;
+    memset(&stockInfo, 0, sizeof(omq_stocks));
+
+    stockInfo.hdr.tr_id = 2;
+    stockInfo.hdr.length = sizeof(omq_stocks);
+
+    printf("[OMS Client] Sent stock Info request : tr_id=%d, length=%d\n", stockInfo.hdr.tr_id, stockInfo.hdr.length);
+
+    if (send(client_sock, (void *)&stockInfo, sizeof(omq_stocks), 0) == -1) {
+        perror("[OMS Client] Send StockInfo request failed");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
 }
 
 void send_hisotry_request(int client_sock, const char *user_id){
@@ -66,7 +84,7 @@ void handle_server_response(int server_sock) {
             perror("Receive failed or connection closed");
             break;
         }
-
+        
         buffer_offset += recv_len;
 
         size_t processed_bytes = 0;
@@ -93,6 +111,17 @@ void handle_server_response(int server_sock) {
                     }
 
                     print_tx(tx, i);
+                }
+            }
+            else if (header->tr_id == MOT_STOCK_INFOS) {
+                mot_stocks *stockInfo = (mot_stocks *)(buffer + processed_bytes);
+                printf("[OMS Client] stock_info Response\n");
+
+                for (int i = 0; i < 4; i++) {
+                    printf("Stock %d: code=%.6s, name=%s\n", i + 1,
+                        stockInfo->body[i].stock_code,
+                        stockInfo->body[i].stock_name
+                    );
                 }
             }
             else printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
@@ -136,6 +165,8 @@ void start_oms_client() {
         send_hisotry_request(client_sock, "jina");
         if(i% 10 == 0) usleep(500000);
     }
+
+    send_stock_info_request(client_sock);
     
     printf("[OMS Client] Request sent to MCI Server\n");
 

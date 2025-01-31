@@ -50,8 +50,9 @@ typedef struct {
 #define MOT_TX_HISTORY 13
 
 // KRX - MCI 관련
-#define KMT_STOCK_INFOS 7
+#define MKQ_STOCK_INFOS 7
 #define KMT_CURRENT_MARKET_PRICES 8
+#define KMT_STOCK_INFOS 14
 
 // KRX - FEP 관련
 #define FKQ_ORDER 9 

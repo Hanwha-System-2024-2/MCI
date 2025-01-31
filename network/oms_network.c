@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include "oms_network.h"
+#include "krx_network.h"
 #include <mysql/mysql.h>
 #include "../include/common.h"
 
@@ -213,8 +214,11 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 
 void handle_omq_stocks(omq_stocks *data, int pipe_write) {
     printf("[OMQ_STOCKS] Forwarding request to KRX process\n");
+    mkq_stock_infos stockInfo;
+    stockInfo.hdr.tr_id = MKQ_STOCK_INFOS;
+    stockInfo.hdr.length = data->hdr.length; 
 
-    if (write(pipe_write, data, sizeof(omq_stocks)) == -1) {
+    if (write(pipe_write, &stockInfo, sizeof(stockInfo)) == -1) {
         perror("[OMQ_STOCKS] Failed to write to pipe");
     }
 }
