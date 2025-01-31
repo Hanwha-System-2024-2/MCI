@@ -115,7 +115,8 @@ void *handle_mkq_stock_infos(void *arg) {
     }
     pthread_mutex_unlock(&socket_mutex); // 소켓 동기화 종료
 
-    free(mkq_data);
+    free(args->data);
+    free(args);
     pthread_exit(NULL); // 쓰레드 종료
 }
 
@@ -133,7 +134,6 @@ mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
 
     if (args->data == NULL) {
         perror("[MKQ Thread] Failed to allocate memory for MKQ_data");
-        free(args->data);
         free(args);
         return NULL;
     }
@@ -161,6 +161,7 @@ void *handle_kmt_stock_infos(void *arg) {
     }
     pthread_mutex_unlock(&pipe_mutex);
 
+    free(args->data);
     free(args);
     pthread_exit(NULL);
 }
@@ -181,7 +182,6 @@ kmt_thread *create_kmt_thread_args(int pipe_write, void *buffer, size_t length) 
     if (args->data == NULL) {
         perror("[KMT Thread] Failed to allocate memory for KMT_data");
         free(args);
-        free(args->data);
         return NULL;
     }
 
@@ -403,7 +403,6 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
     mq_unlink(MQ_NAME);
     close(krx_sock);
     close(epoll_fd);
-    close(krx_sock);
     close(pipe_read);
     
     return EXIT_SUCCESS;
