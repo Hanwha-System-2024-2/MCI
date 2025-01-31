@@ -95,7 +95,10 @@ void handle_server_response(int server_sock) {
                     print_tx(tx, i);
                 }
             }
-            else printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
+            else if(header->tr_id == MOT_CURRENT_MARKET_PRICE)
+                printf("[OMS Client] Current Market Price received.\n");
+            else 
+                printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
 
             processed_bytes += header->length;
         }
