@@ -35,15 +35,22 @@ typedef struct {
 } mot_market_price;
 
 typedef struct { // 거래 내역
-	char stock_code[6];
-	char stock_name[50];
-	char tx_code[6];
-	char user_id[50];
+	char stock_code[7];
+    char padding1;
+	char stock_name[51];
+    char padding2;
+	char tx_code[7];
+    char padding3;
+	char user_id[51];
+    char padding4;
 	char order_type;
 	int quantity;
 	char datetime[15];	// 'YYYYMMDDHHMMSS'
+    char padding5;
 	int price;
 	char status; // 체결 여부
+    char padding6[3];
+    char reject_code[4];      // 거부사유코드 (문자열)
 } transaction;
 
 typedef struct {
