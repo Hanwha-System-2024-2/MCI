@@ -35,4 +35,10 @@ typedef struct {
 
 int handle_krx(int krx_sock, int pipe_write, int pipe_read);
 
+
+#define MQ_NAME "/kmt_market_price_queue_new"
+#define MQ_MAX_MSG 10
+#define MQ_MSG_SIZE sizeof(kmt_current_market_prices)
+#define MAX_EVENTS 2     // 최대 감시 파일 디스크립터 개수
+
 #endif
