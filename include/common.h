@@ -28,7 +28,7 @@ typedef struct {
   hoga hoga[2];             // 호가
   int high_price;           // 고가
   int low_price;            // 저가
-  char market_time[19]; char padding4;    // 시세 형성 시간
+  char market_time[15]; char padding4;    // 시세 형성 시간
 } current_market_price;
 
 // 종목 정보 구조체
