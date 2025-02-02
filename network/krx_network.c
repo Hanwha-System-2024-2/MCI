@@ -401,4 +401,5 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
     close(pipe_read);
     
     return EXIT_SUCCESS;
+
 }

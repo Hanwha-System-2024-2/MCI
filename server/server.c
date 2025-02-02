@@ -15,6 +15,8 @@
 #include "oms_network.h"
 #include "env.h"
 
+#define MAX_CLIENTS 100
+
 int connect_db(MYSQL *conn);
 int connect_to_krx();
 void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]);
@@ -49,13 +51,10 @@ int main() {
 
     return 0;
 }
-
 void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
     int oms_sock;
-    struct sockaddr_in oms_addr, client_addr;
-    socklen_t client_len;
+    struct sockaddr_in oms_addr;
 
-    // OMS 소켓 설정
     if ((oms_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("OMS socket creation failed");
         exit(EXIT_FAILURE);
@@ -71,7 +70,7 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
         exit(EXIT_FAILURE);
     }
 
-    if (listen(oms_sock, 5) == -1) {
+    if (listen(oms_sock, MAX_CLIENTS) == -1) {
         perror("Listen failed for OMS");
         close(oms_sock);
         exit(EXIT_FAILURE);
@@ -79,40 +78,15 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
 
     printf("[OMS Server] Listening on port %d\n", MCI_SERVER_PORT);
 
-    while (1) {
-        client_len = sizeof(client_addr);
-        int client_sock = accept(oms_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock == -1) {
-            perror("Accept failed");
-            continue;
-        }
-
-        printf("[OMS Server] Client connected: %s:%d\n",
-               inet_ntoa(client_addr.sin_addr),
-               ntohs(client_addr.sin_port));
-
-        pid_t oms_pid = fork();
-        if (oms_pid == 0) {
-            // 자식 프로세스: OMS 클라이언트 통신 처리
-            close(pipe_krx_to_oms[1]);
-            close(pipe_oms_to_krx[0]);
-            close(oms_sock);
-
-            MYSQL *conn = mysql_init(NULL);
-            if (connect_db(conn) == 1) {
-                handle_oms(conn, client_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
-            }
-
-            mysql_close(conn);
-            close(client_sock);
-            exit(0);
-        } else if (oms_pid < 0) {
-            perror("Fork for OMS failed");
-        }
-
-        close(client_sock);
+    MYSQL *conn = mysql_init(NULL);
+    if (connect_db(conn) != 1) {
+        perror("Database connection failed");
+        exit(EXIT_FAILURE);
     }
 
+    handle_oms(conn, oms_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
+
+    mysql_close(conn);
     close(oms_sock);
 }
 
