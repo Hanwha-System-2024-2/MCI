@@ -10,7 +10,6 @@
 #include <pthread.h>
 #include <mqueue.h>
 #include <sys/epoll.h>
-#include <mqueue.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -18,10 +17,6 @@
 #include "krx_network.h"
 #include "oms_network.h"
 
-#define MQ_NAME "/kmt_market_price_queue"
-#define MQ_MAX_MSG 10
-#define MQ_MSG_SIZE sizeof(kmt_current_market_prices)
-#define MAX_EVENTS 2     // 최대 감시 파일 디스크립터 개수
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
 
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER; // Socket 동기화
@@ -406,4 +401,5 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
     close(pipe_read);
     
     return EXIT_SUCCESS;
+
 }

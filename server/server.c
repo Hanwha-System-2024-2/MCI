@@ -7,10 +7,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <mysql/mysql.h>
+#include <mqueue.h>
+
 #include "krx_network.h"
 #include "oms_network.h"
 #include "env.h"
-#include <mysql/mysql.h>
 
 #define MAX_CLIENTS 100
 
@@ -87,7 +90,18 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
     close(oms_sock);
 }
 
+void cleanup_mq(int signo) {
+    // 신호 발생 시 MQ 자원을 unlink하여 제거
+    printf("[Cleanup] Signal %d received. Cleaning up message queue '%s'.\n", signo, MQ_NAME);
+    mq_unlink(MQ_NAME);
+    exit(EXIT_SUCCESS);
+}
+
 void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
+    /* KRX 클라이언트 프로세스에서 signal handler 등록 */
+    signal(SIGINT,  cleanup_mq);
+    signal(SIGTERM, cleanup_mq);
+
     while (1) {
         int krx_sock = connect_to_krx();
         if (krx_sock != -1) {
@@ -95,8 +109,12 @@ void run_krx_client(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
 
             close(pipe_krx_to_oms[0]);
             close(pipe_oms_to_krx[1]);
-            handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
+            int status = handle_krx(krx_sock, pipe_krx_to_oms[1], pipe_oms_to_krx[0]);
             close(krx_sock);
+
+            if (status == EXIT_FAILURE) {
+                printf("[KRX Process] Connection lost. Attempting to reconnect...\n");
+            }
         }
         sleep(5); // 5초마다 재연결
     }
