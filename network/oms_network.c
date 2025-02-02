@@ -173,7 +173,7 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 
     char query[512];
     snprintf(query, sizeof(query),
-             "SELECT stock_code, stock_name, transaction_code, user_id, order_type, quantity, "
+             "SELECT stock_code, stock_name, transaction_code, user_id, order_type, quantity, reject_code, "
              "DATE_FORMAT(order_time, '%%Y%%m%%d%%H%%i%%s') AS datetime, price, status "
              "FROM tx_history "
              "WHERE user_id = '%s' "
@@ -190,7 +190,9 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
         return;
     }
 
-    mot_tx_history response = {0};
+    mot_tx_history response;
+    memset(&response, 0, sizeof(response)); 
+
     response.hdr.tr_id = 13;
     
     int row_count = 0;
@@ -211,13 +213,29 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 
         response.tx_history[row_count].order_type = row[4][0];
         response.tx_history[row_count].quantity = atoi(row[5]);
+        
+        strncpy(response.tx_history[row_count].reject_code, row[6], sizeof(response.tx_history[row_count].reject_code) - 1);
+        response.tx_history[row_count].reject_code[sizeof(response.tx_history[row_count].reject_code) - 1] = '\0';
 
-        strncpy(response.tx_history[row_count].datetime, row[6], sizeof(response.tx_history[row_count].datetime) - 1);
+        strncpy(response.tx_history[row_count].datetime, row[7], sizeof(response.tx_history[row_count].datetime) - 1);
         response.tx_history[row_count].datetime[sizeof(response.tx_history[row_count].datetime) - 1] = '\0';
 
-        response.tx_history[row_count].price = atoi(row[7]);
-        response.tx_history[row_count].status = row[8][0];
-
+        response.tx_history[row_count].price = atoi(row[8]);
+        response.tx_history[row_count].status = row[9][0];
+        
+        // printf("[TX_HISTORY] #%d Stock Code: %s, Name: %s, Tx Code: %s, User: %s, "
+        //    "Order Type: %c, Quantity: %d, Reject Code: %s, Datetime: %s, Status: %c\n",
+        //    row_count + 1,
+        //    response.tx_history[row_count].stock_code,
+        //    response.tx_history[row_count].stock_name,
+        //    response.tx_history[row_count].tx_code,
+        //    response.tx_history[row_count].user_id,
+        //    response.tx_history[row_count].order_type,
+        //    response.tx_history[row_count].quantity,
+        //    response.tx_history[row_count].reject_code,
+        //    response.tx_history[row_count].datetime,
+        //    response.tx_history[row_count].status);
+        
         row_count++;
     }
 
@@ -232,7 +250,6 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 
     mysql_free_result(result);
 }
-
 
 void handle_omq_stocks(omq_stocks *data, int pipe_write) {
     printf("[OMQ_STOCKS] Forwarding request to KRX process\n");
