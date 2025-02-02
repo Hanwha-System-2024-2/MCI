@@ -69,7 +69,7 @@ void *handle_current_market_price(void *arg) {
             continue;
         }
 
-        print_kmt_current_market_prices(&received_data);
+        // print_kmt_current_market_prices(&received_data);
         printf("[Market Price Thread] Received data from message queue.\n");
 
         // 데이터를 mot_market_price로 변환

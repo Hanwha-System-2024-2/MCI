@@ -66,12 +66,13 @@ void print_tx(transaction *tx, int i){
     // printf("  Stock Code: %s\n", tx->stock_code);
     // printf("  Stock Name: %s\n", tx->stock_name);
     // printf("  Transaction Code: %s\n", tx->tx_code);
-    // printf("  User ID: %s\n", tx->user_id);
+    printf("  User ID: %s\n", tx->user_id);
     // printf("  Order Type: %c\n", tx->order_type);
     // printf("  Quantity: %d\n", tx->quantity);
     printf("  Date/Time: %s\n", tx->datetime);
     // printf("  Price: %d\n", tx->price);
     // printf("  Status: %c\n", tx->status);
+    // printf("  Reject code: %s\n", tx->reject_code);
 }
 
 void handle_server_response(int server_sock) {

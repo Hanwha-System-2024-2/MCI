@@ -44,13 +44,15 @@ typedef struct { // 거래 내역
 	char user_id[51];
     char padding4;
 	char order_type;
+    char padding5[3];
 	int quantity;
 	char datetime[15];	// 'YYYYMMDDHHMMSS'
-    char padding5;
+    char padding6;
 	int price;
 	char status; // 체결 여부
-    char padding6[3];
-    char reject_code[4];      // 거부사유코드 (문자열)
+    char padding7[3];
+    char reject_code[5];      // 거부사유코드 (문자열)
+    char padding8[3];
 } transaction;
 
 typedef struct {
