@@ -111,7 +111,7 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
                     printf("[OMS-KRX -> OMS-MCI] event occurs\n");
                     switch (header->tr_id) {
                         case MOT_STOCK_INFOS:
-                            handle_mot_stocks((mot_stocks *)body);
+                            handle_mot_stock_infos((mpt_stock_infos *)body);
                             break;
                         case MOT_CURRENT_MARKET_PRICE:
                             handle_mot_market_price((mot_market_price *)body);
@@ -131,7 +131,7 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
                             handle_omq_tx_history((omq_tx_history *) body, events[i].data.fd, conn);
                             break;
                         case OMQ_STOCK_INFOS:
-                            handle_omq_stocks((omq_stocks *)body, pipe_write);
+                            handle_omq_stock_infos((omq_stock_infos *)body, pipe_write, events[i].data.fd);
                             break;
                         case OMQ_CURRENT_MARKET_PRICE:
                             handle_omq_market_price((omq_market_price *)body, pipe_write);
@@ -251,21 +251,29 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
     mysql_free_result(result);
 }
 
-void handle_omq_stocks(omq_stocks *data, int pipe_write) {
-    printf("[OMQ_STOCKS] Forwarding request to KRX process\n");
-    mkq_stock_infos stockInfo;
-    stockInfo.hdr.tr_id = MKQ_STOCK_INFOS;
-    stockInfo.hdr.length = data->hdr.length; 
+void handle_omq_stock_infos(omq_stock_infos *data, int pipe_write, int oms_sock) {
+    printf("[OMQ_STOCK_INFOS] Forwarding request to KRX process from oms_sock: %d\n", oms_sock);
+    
+    mpq_stock_infos stockInfo;
+    stockInfo.oms_sock = oms_sock;
+    stockInfo.omq_stock_infos = *data; // 요청 데이터 복사
+
+    printf("[omq_stock_infos] OMS_SOCK = %d\n", oms_sock);
 
     if (write(pipe_write, &stockInfo, sizeof(stockInfo)) == -1) {
-        perror("[OMQ_STOCKS] Failed to write to pipe");
+        perror("[OMQ_STOCK_INFOS] Failed to write to pipe");
     }
 }
 
-void handle_mot_stocks(mot_stocks *data) {
-    printf("[MOT_STOCKS] Broadcasting stock info to all OMS clients\n");
+void handle_mot_stock_infos(mpt_stock_infos *data) {
+    printf("[MOT_STOCK_INFOS] Sending stock info to requesting OMS client: %d\n", data->oms_sock);
     
-    broadcast_to_clients(data, sizeof(mot_stocks));
+    int oms_sock = data->oms_sock;
+    mot_stock_infos stockInfo = data->mot_stock_infos;
+    
+    if (send(oms_sock, &stockInfo, sizeof(stockInfo), 0) == -1) {
+        perror("[MOT_STOCK_INFOS] Failed to send stock info to OMS client");
+    }
 }
 
 void handle_omq_market_price(omq_market_price *data, int pipe_write) {

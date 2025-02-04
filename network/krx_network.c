@@ -140,7 +140,7 @@ mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
 
 void *handle_kmt_stock_infos(void *arg) {
     kmt_thread *args = (kmt_thread *)arg;
-    mot_stocks mot_data;
+    mot_stock_infos mot_data;
 
     // 데이터 변환 (kmt_stock_infos → mot_stocks)
     mot_data.hdr.tr_id = MOT_STOCK_INFOS;             // 변환된 데이터 타입 설정
@@ -149,7 +149,7 @@ void *handle_kmt_stock_infos(void *arg) {
 
     // 파이프에 전송
     pthread_mutex_lock(&pipe_mutex);
-    if (write(args->pipe_write, &mot_data, sizeof(mot_stocks)) == -1) {
+    if (write(args->pipe_write, &mot_data, sizeof(mot_stock_infos)) == -1) {
         perror("[KMT Thread] Failed to write data to pipe");
     } else {
         printf("[KMT Thread] Sent mot_stocks to pipe successfully.\n");

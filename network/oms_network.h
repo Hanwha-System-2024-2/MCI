@@ -18,12 +18,22 @@ typedef struct {
 
 typedef struct {
     hdr hdr;
-} omq_stocks;
+} omq_stock_infos;
 
 typedef struct {
     hdr hdr;
     stock_info body[4]; // kmt_stock_infos 구조체에서 가져온 stock_info[4]
-} mot_stocks;
+} mot_stock_infos;
+
+typedef struct {
+    int oms_sock;
+    omq_stock_infos omq_stock_infos;
+} mpq_stock_infos;
+
+typedef struct {
+    int oms_sock;
+    mot_stock_infos mot_stock_infos;
+} mpt_stock_infos;
 
 typedef struct {
     hdr hdr;
@@ -67,8 +77,8 @@ typedef struct {
 
 void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read);
 void handle_omq_login(omq_login *data, int oms_sock, MYSQL *conn);
-void handle_omq_stocks(omq_stocks *data, int pipe_write);
-void handle_mot_stocks(mot_stocks *data);
+void handle_omq_stock_infos(omq_stock_infos *data, int pipe_write, int oms_sock);
+void handle_mot_stock_infos(mpt_stock_infos *data);
 void handle_omq_market_price(omq_market_price *data, int pipe_write);
 void handle_mot_market_price(mot_market_price *data);
 void send_login_response(int oms_sock,char *user_id, int status_code);
