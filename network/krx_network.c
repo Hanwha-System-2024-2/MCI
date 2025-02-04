@@ -17,11 +17,10 @@
 
 #include "krx_network.h"
 #include "oms_network.h"
+#include "../data/batch.h"
 
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
-#define FILE_PREFIX "stock_info_"
-#define FILE_EXTENSION ".bin"
-#define FILE_DIR "/home/ec2-user/Hanwha/MCI/data/"
+
 
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER; // Socket 동기화
 pthread_mutex_t pipe_mutex = PTHREAD_MUTEX_INITIALIZER;  // 파이프 write 동기화
@@ -147,7 +146,7 @@ void get_today_filepath(char *filepath, size_t size) {
     struct tm *t = localtime(&now);
     
     snprintf(filepath, size, "%s%s%04d_%02d_%02d%s",
-             FILE_DIR, FILE_PREFIX, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, FILE_EXTENSION);
+             FILE_DIRECTORY, FILE_PREFIX, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, FILE_EXTENSION);
 }
 
 // 파일이 오늘 날짜 파일인지 확인
