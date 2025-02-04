@@ -31,17 +31,15 @@ void send_login_request(int client_sock, const char *user_id, const char *user_p
     printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
 }
 
-void send_stock_info_request(int client_sock) {
-    omq_stocks stockInfo;
-    memset(&stockInfo, 0, sizeof(omq_stocks));
 
-    stockInfo.hdr.tr_id = 2;
-    stockInfo.hdr.length = sizeof(omq_stocks);
+void send_stock_info_request(int client_sock){
+    omq_stock_infos req;
 
-    printf("[OMS Client] Sent stock Info request : tr_id=%d, length=%d\n", stockInfo.hdr.tr_id, stockInfo.hdr.length);
+    req.hdr.tr_id = 2;
+    req.hdr.length = sizeof(omq_stock_infos);
 
-    if (send(client_sock, (void *)&stockInfo, sizeof(omq_stocks), 0) == -1) {
-        perror("[OMS Client] Send StockInfo request failed");
+    if(send(client_sock, (void *) &req, sizeof(omq_stock_infos), 0) == -1){
+        perror("[OMS Client] Send Stock infos request failed");
         close(client_sock);
         exit(EXIT_FAILURE);
     }
@@ -115,7 +113,7 @@ void handle_server_response(int server_sock) {
                 }
             }
             else if (header->tr_id == MOT_STOCK_INFOS) {
-                mot_stocks *stockInfo = (mot_stocks *)(buffer + processed_bytes);
+                mot_stock_infos *stockInfo = (mot_stock_infos *)(buffer + processed_bytes);
                 printf("[OMS Client] stock_info Response\n");
 
                 for (int i = 0; i < 4; i++) {
@@ -162,8 +160,9 @@ void start_oms_client() {
     for(int i=0;i<1;i++){
         // send_login_request(client_sock, "hj", "1234"); // fail: 201
         // send_login_request(client_sock, "jina", "123"); // fail: 202
-        send_login_request(client_sock, "jina", "1234"); // success: 200
-        send_hisotry_request(client_sock, "jina");
+        // send_login_request(client_sock, "jina", "1234"); // success: 200
+        // send_hisotry_request(client_sock, "jina");
+        send_stock_info_request(client_sock);
         if(i% 10 == 0) usleep(500000);
     }
 
