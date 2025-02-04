@@ -254,11 +254,13 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
 void handle_omq_stock_infos(omq_stock_infos *data, int pipe_write, int oms_sock) {
     printf("[OMQ_STOCK_INFOS] Forwarding request to KRX process from oms_sock: %d\n", oms_sock);
     
+    if(data->hdr.length != sizeof(omq_stock_infos)){
+        perror("[OMQ_STOCK_INFOS] Failed to write to pipe");
+    }
     mpq_stock_infos stockInfo;
+    stockInfo.hdr.tr_id = MKQ_STOCK_INFOS;
+    stockInfo.hdr.length = sizeof(mpq_stock_infos);
     stockInfo.oms_sock = oms_sock;
-    stockInfo.omq_stock_infos = *data; // 요청 데이터 복사
-
-    printf("[omq_stock_infos] OMS_SOCK = %d\n", oms_sock);
 
     if (write(pipe_write, &stockInfo, sizeof(stockInfo)) == -1) {
         perror("[OMQ_STOCK_INFOS] Failed to write to pipe");
@@ -269,8 +271,12 @@ void handle_mot_stock_infos(mpt_stock_infos *data) {
     printf("[MOT_STOCK_INFOS] Sending stock info to requesting OMS client: %d\n", data->oms_sock);
     
     int oms_sock = data->oms_sock;
-    mot_stock_infos stockInfo = data->mot_stock_infos;
     
+    mot_stock_infos stockInfo;
+    stockInfo.hdr.tr_id = MOT_STOCK_INFOS;
+    stockInfo.hdr.length = sizeof(mot_stock_infos);
+    memcpy(stockInfo.body, data->body, sizeof(data->body));
+
     if (send(oms_sock, &stockInfo, sizeof(stockInfo), 0) == -1) {
         perror("[MOT_STOCK_INFOS] Failed to send stock info to OMS client");
     }

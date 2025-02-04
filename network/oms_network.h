@@ -26,13 +26,14 @@ typedef struct {
 } mot_stock_infos;
 
 typedef struct {
+    hdr hdr; // tr_id: omq_stock_infos와 동일
     int oms_sock;
-    omq_stock_infos omq_stock_infos;
 } mpq_stock_infos;
 
 typedef struct {
+    hdr hdr; // tr_id: mot_stock_infos와 동일
     int oms_sock;
-    mot_stock_infos mot_stock_infos;
+    stock_info body[4];
 } mpt_stock_infos;
 
 typedef struct {
