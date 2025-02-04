@@ -13,11 +13,15 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <sys/mman.h>
 
 #include "krx_network.h"
 #include "oms_network.h"
 
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
+#define FILE_PREFIX "stock_info_"
+#define FILE_EXTENSION ".bin"
+#define FILE_DIR "/home/ec2-user/Hanwha/MCI/data/"
 
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER; // Socket 동기화
 pthread_mutex_t pipe_mutex = PTHREAD_MUTEX_INITIALIZER;  // 파이프 write 동기화
@@ -116,7 +120,6 @@ void *handle_mkq_stock_infos(void *arg) {
 }
 
 mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
-    // mkq_thread 구조체 동적 할당
     mkq_thread *args = malloc(sizeof(mkq_thread));
     if (args == NULL) {
         perror("[MKQ Thread] Failed to allocate memory for MKQ_thread arguments");
@@ -138,6 +141,87 @@ mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
     return args;
 }
 
+// 오늘 날짜 기반 파일 경로 생성
+void get_today_filepath(char *filepath, size_t size) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    
+    snprintf(filepath, size, "%s%s%04d_%02d_%02d%s",
+             FILE_DIR, FILE_PREFIX, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, FILE_EXTENSION);
+}
+
+// 파일이 오늘 날짜 파일인지 확인
+int is_valid_today_file(const char *filepath) {
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+    return strcmp(filepath, today_filepath) == 0;
+}
+
+// 데이터를 오늘 날짜의 파일로 저장
+void save_data_to_today_file(const void *data, size_t size) {
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+
+    FILE *file = fopen(today_filepath, "wb");  // 바이너리 모드로 저장
+    if (file == NULL) {
+        perror("[KRX-Save] Failed to open file for writing");
+        return;
+    }
+
+    size_t written = fwrite(data, 1, size, file);
+    fclose(file);
+
+    if (written == size) {
+        printf("[KRX-Save] Data saved successfully: %s\n", today_filepath);
+    } else {
+        perror("[KRX-Save] Failed to write full data to file");
+    }
+}
+
+// 파일을 메모리 매핑하여 파이프에 전송
+void send_file_data_to_pipe(const char *filename, int pipe_write) {
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1) {
+        perror("[KRX-Pipe] Failed to open file");
+        return;
+    }
+
+    // 파일 크기 가져오기
+    struct stat file_stat;
+    if (fstat(fd, &file_stat) == -1) {
+        perror("[KRX-Pipe] Failed to get file size");
+        close(fd);
+        return;
+    }
+
+    size_t file_size = file_stat.st_size;
+    if (file_size == 0) {
+        printf("[KRX-Pipe] File is empty, skipping transmission.\n");
+        close(fd);
+        return;
+    }
+
+    // 메모리 매핑 (mmap)
+    void *mapped_data = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped_data == MAP_FAILED) {
+        perror("[KRX-Pipe] Failed to map file to memory");
+        close(fd);
+        return;
+    }
+
+    // 파이프에 데이터 전송
+    if (write(pipe_write, mapped_data, file_size) == -1) {
+        perror("[KRX-Pipe] Failed to write data to pipe");
+    } else {
+        printf("[KRX-Pipe] Sent file data to pipe successfully: %s\n", filename);
+    }
+
+    // 리소스 해제
+    munmap(mapped_data, file_size);
+    close(fd);
+}
+
+
 void *handle_kmt_stock_infos(void *arg) {
     kmt_thread *args = (kmt_thread *)arg;
     mot_stock_infos mot_data;
@@ -146,6 +230,9 @@ void *handle_kmt_stock_infos(void *arg) {
     mot_data.hdr.tr_id = MOT_STOCK_INFOS;             // 변환된 데이터 타입 설정
     mot_data.hdr.length = args->data->hdr.length;    // 변환된 데이터 길이 설정
     memcpy(mot_data.body, args->data->body, sizeof(args->data->body)); // body 데이터 복사
+
+    // 파일로 저장
+    save_data_to_today_file(&mot_data, sizeof(mot_data));
 
     // 파이프에 전송
     pthread_mutex_lock(&pipe_mutex);
@@ -245,6 +332,9 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
     char pipe_buffer[BUFFER_SIZE];
     size_t pipe_buffer_offset = 0;
 
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+
     while (1) {
         // epoll 대기
         nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
@@ -314,8 +404,7 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
                             if (args == NULL) {
                                 continue; // 메모리 할당 실패 시 다음 루프
                             }
-
-                            // 쓰레드 생성
+                            
                             pthread_t request_thread;
                             if (pthread_create(&request_thread, NULL, handle_kmt_stock_infos, args) != 0) {
                                 perror("[KRX-Socket] Failed to create KMT_thread");
@@ -371,15 +460,20 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
 
                     switch (tr_id) {
                         case MKQ_STOCK_INFOS:
-                            mkq_thread *args = create_mkq_thread_args(krx_sock, pipe_buffer, header->length);
+                            // 파일이 존재하고 오늘 날짜 파일명과 일치하면 전송
+                            if (access(today_filepath, F_OK) == 0 && is_valid_today_file(today_filepath)) {
+                                send_file_data_to_pipe(today_filepath, pipe_write);
+                            } else {
+                                mkq_thread *args = create_mkq_thread_args(krx_sock, pipe_buffer, header->length);
 
-                            pthread_t request_thread;
-                            if (pthread_create(&request_thread, NULL, handle_mkq_stock_infos, args) != 0) {
-                                perror("[KRX-Socket] Failed to create MKQ_thread");
-                                free(args);
-                                continue;
+                                pthread_t request_thread;
+                                if (pthread_create(&request_thread, NULL, handle_mkq_stock_infos, args) != 0) {
+                                    perror("[KRX-Socket] Failed to create MKQ_thread");
+                                    free(args);
+                                    continue;
+                                }
+                                pthread_detach(request_thread);
                             }
-                            pthread_detach(request_thread);
                             break;
 
                         default:
