@@ -13,11 +13,14 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <sys/mman.h>
 
 #include "krx_network.h"
 #include "oms_network.h"
+#include "../data/batch.h"
 
 #define BUFFER_SIZE 1024 // 버퍼 사이즈
+
 
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER; // Socket 동기화
 pthread_mutex_t pipe_mutex = PTHREAD_MUTEX_INITIALIZER;  // 파이프 write 동기화
@@ -81,14 +84,10 @@ void *handle_current_market_price(void *arg) {
             transformed_data.body[i] = received_data.body[i];
         }
 
-        printf("[Market Price Thread] Data transformed successfully.\n");
-
         // 파이프로 전송
         pthread_mutex_lock(&pipe_mutex);
         if (write(pipe_write, &transformed_data, sizeof(transformed_data)) == -1) {
             perror("[Market Price Thread] Failed to write to pipe");
-        } else {
-            printf("[Market Price Thread] Data sent to pipe successfully.\n");
         }
         pthread_mutex_unlock(&pipe_mutex);
     }
@@ -97,26 +96,108 @@ void *handle_current_market_price(void *arg) {
     pthread_exit(NULL);
 }
 
-void *handle_mkq_stock_infos(void *arg) {
-    mkq_thread *args = (mkq_thread *)arg;
-    mkq_stock_infos *mkq_data = args->data;
-
-    // KRX 소켓으로 데이터 전송
-    pthread_mutex_lock(&socket_mutex); // 소켓 동기화 시작
-    if (send(args->krx_sock, mkq_data, sizeof(kmt_stock_infos), 0) == -1) {
-        perror("[MKQ Thread] Failed to send data to KRX socket");
-    } else {
-        printf("[MKQ Thread] Data sent to KRX socket successfully.\n");
-    }
-    pthread_mutex_unlock(&socket_mutex); // 소켓 동기화 종료
-
-    free(args->data);
-    free(args);
-    pthread_exit(NULL); // 쓰레드 종료
+// 오늘 날짜 기반 파일 경로 생성
+void get_today_filepath(char *filepath, size_t size) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    
+    snprintf(filepath, size, "%s%s%04d_%02d_%02d%s",
+             FILE_DIRECTORY, FILE_PREFIX, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, FILE_EXTENSION);
 }
 
-mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
-    // mkq_thread 구조체 동적 할당
+// 파일이 오늘 날짜 파일인지 확인
+int is_valid_today_file(const char *filepath) {
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+    return strcmp(filepath, today_filepath) == 0;
+}
+
+// 데이터를 오늘 날짜의 파일로 저장
+void save_stock_info_to_file(const void *data, size_t size) {
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+
+    FILE *file = fopen(today_filepath, "wb");  // 바이너리 모드로 저장
+    if (file == NULL) {
+        perror("[KRX-Save] Failed to open file for writing");
+        return;
+    }
+
+    size_t written = fwrite(data, 1, size, file);
+    fclose(file);
+
+    if (written == size) {
+        printf("[KRX-Save] Data saved successfully\n");
+    } else {
+        perror("[KRX-Save] Failed to write full data to file");
+    }
+}
+
+// 파일을 메모리 매핑하여 파이프에 전송
+void send_file_data_to_pipe(mkq_thread *args, int pipe_write) {
+    mpt_stock_infos mpt_data;
+    mpt_data.hdr.tr_id = MOT_STOCK_INFOS;
+    mpt_data.hdr.length = sizeof(mpt_stock_infos);
+    mpt_data.oms_sock = args->request->oms_sock;
+
+    int fd = open(args->today_filepath, O_RDONLY);
+    if (fd == -1) {
+        perror("[KRX-Pipe] Failed to open file");
+        return;
+    }
+
+    struct stat file_stat;
+    if (fstat(fd, &file_stat) == -1) {
+        perror("[KRX-Pipe] Failed to get file size");
+        close(fd);
+        return;
+    }
+
+    size_t file_size = file_stat.st_size;
+    if (file_size == 0) {
+        printf("[KRX-Pipe] File is empty, skipping transmission.\n");
+        close(fd);
+        return;
+    }
+
+    void *mapped_data = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped_data == MAP_FAILED) {
+        perror("[KRX-Pipe] Failed to map file to memory");
+        close(fd);
+        return;
+    }
+
+    size_t copy_size = file_size < sizeof(mpt_data.body) ? file_size : sizeof(mpt_data.body);
+    memcpy(mpt_data.body, mapped_data, copy_size);
+
+    pthread_mutex_lock(&pipe_mutex);
+    if (write(pipe_write, &mpt_data, sizeof(mpt_stock_infos)) == -1) {
+        perror("[KRX-Pipe] Failed to write data to pipe");
+    } else {
+        printf("[KRX-Pipe] Sent stock info data to pipe successfully\n");
+    }
+    pthread_mutex_unlock(&pipe_mutex);
+
+    munmap(mapped_data, file_size);
+    close(fd);
+}
+
+void *handle_mkq_stock_infos(void *arg) {
+    mkq_thread *args = (mkq_thread *)arg;
+
+    if (access(args->today_filepath, F_OK) == 0 && is_valid_today_file(args->today_filepath)) {
+        send_file_data_to_pipe(args, args->pipe_write);
+    } else {
+        printf("[MKQ Thread] No valid file found for today.\n");
+    }
+
+    free(args->request);
+    free(args->today_filepath);
+    free(args);
+    pthread_exit(NULL);
+}
+
+mkq_thread *create_mkq_thread_args(int pipe_write, char *today_filepath, void *buffer, size_t length) {
     mkq_thread *args = malloc(sizeof(mkq_thread));
     if (args == NULL) {
         perror("[MKQ Thread] Failed to allocate memory for MKQ_thread arguments");
@@ -124,46 +205,38 @@ mkq_thread *create_mkq_thread_args(int krx_sock, void *buffer, size_t length) {
     }
 
     memset(args, 0, sizeof(mkq_thread)); 
-    args->krx_sock = krx_sock;
-    args->data = malloc(length);
+    args->pipe_write = pipe_write;
+    
+    args->today_filepath = strdup(today_filepath); 
+    if (args->today_filepath == NULL) {
+        perror("[MKQ Thread] Failed to allocate memory for today_filepath");
+        free(args);
+        return NULL;
+    }
 
-    if (args->data == NULL) {
+    args->request = malloc(length);
+    if (args->request == NULL) {
         perror("[MKQ Thread] Failed to allocate memory for MKQ_data");
+        free(args->today_filepath);
         free(args);
         return NULL;
     }
 
     // 버퍼 복사
-    memcpy(args->data, buffer, length);
+    memcpy(args->request, buffer, length);
     return args;
 }
 
 void *handle_kmt_stock_infos(void *arg) {
     kmt_thread *args = (kmt_thread *)arg;
-    mot_stock_infos mot_data;
-
-    // 데이터 변환 (kmt_stock_infos → mot_stocks)
-    mot_data.hdr.tr_id = MOT_STOCK_INFOS;             // 변환된 데이터 타입 설정
-    mot_data.hdr.length = args->data->hdr.length;    // 변환된 데이터 길이 설정
-    memcpy(mot_data.body, args->data->body, sizeof(args->data->body)); // body 데이터 복사
-
-    // 파이프에 전송
-    pthread_mutex_lock(&pipe_mutex);
-    if (write(args->pipe_write, &mot_data, sizeof(mot_stock_infos)) == -1) {
-        perror("[KMT Thread] Failed to write data to pipe");
-    } else {
-        printf("[KMT Thread] Sent mot_stocks to pipe successfully.\n");
-    }
-    pthread_mutex_unlock(&pipe_mutex);
+    save_stock_info_to_file(args->data->body, sizeof(args->data->body));
 
     free(args->data);
     free(args);
     pthread_exit(NULL);
 }
 
-
-kmt_thread *create_kmt_thread_args(int pipe_write, void *buffer, size_t length) {
-    // kmt_thread 구조체 동적 할당
+kmt_thread *create_kmt_thread_args(void *buffer, size_t length) {
     kmt_thread *args = malloc(sizeof(kmt_thread));
     if (args == NULL) {
         perror("[KMT Thread] Failed to allocate memory for KMT_thread arguments");
@@ -171,7 +244,6 @@ kmt_thread *create_kmt_thread_args(int pipe_write, void *buffer, size_t length) 
     }
 
     memset(args, 0, sizeof(kmt_thread)); 
-    args->pipe_write = pipe_write;
     args->data = malloc(length);
 
     if (args->data == NULL) {
@@ -184,8 +256,27 @@ kmt_thread *create_kmt_thread_args(int pipe_write, void *buffer, size_t length) 
     return args;
 }
 
-// krx_sock 기반으로 데이터 판단해서 처리 진행
+void init_stock_info_request(int krx_sock) {
+    mkq_stock_infos mkq_data;
+    
+    memset(&mkq_data, 0, sizeof(mkq_stock_infos));
+    mkq_data.hdr.tr_id = MKQ_STOCK_INFOS;
+    mkq_data.hdr.length = sizeof(mkq_stock_infos);
+
+    char data[512] = "huhuhuhuhuh";
+
+    pthread_mutex_lock(&socket_mutex); // 소켓 동기화 시작
+    if (send(krx_sock, &data, sizeof(data), 0) == -1) {
+        perror("[INIT] Failed to send data to KRX socket");
+    } else {
+        printf("[INIT] Data sent to KRX socket successfully.\n");
+    }
+    pthread_mutex_unlock(&socket_mutex); // 소켓 동기화 종료
+}
+
 int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
+    
+
     // Message Queue 생성
     struct mq_attr attr = {0};
     attr.mq_flags = 0;
@@ -244,6 +335,14 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
 
     char pipe_buffer[BUFFER_SIZE];
     size_t pipe_buffer_offset = 0;
+
+    char today_filepath[256];
+    get_today_filepath(today_filepath, sizeof(today_filepath));
+
+    // 초기 주식 정보 파일 저장
+    if (access(today_filepath, F_OK) != 0 || !is_valid_today_file(today_filepath)) {
+        init_stock_info_request(krx_sock);
+    }
 
     while (1) {
         // epoll 대기
@@ -309,21 +408,18 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
                         }
 
                         case KMT_STOCK_INFOS: {
-                            // kmt_thread 생성
-                            kmt_thread *args = create_kmt_thread_args(pipe_write, krx_buffer, header->length);
+                            kmt_thread *args = create_kmt_thread_args(krx_buffer, header->length);
                             if (args == NULL) {
                                 continue; // 메모리 할당 실패 시 다음 루프
                             }
-
-                            // 쓰레드 생성
+                            
                             pthread_t request_thread;
                             if (pthread_create(&request_thread, NULL, handle_kmt_stock_infos, args) != 0) {
                                 perror("[KRX-Socket] Failed to create KMT_thread");
                                 free(args);
                                 continue;
                             }
-
-                            pthread_detach(request_thread); // 쓰레드 분리
+                            pthread_detach(request_thread);
                             break;
                         }
 
@@ -370,8 +466,8 @@ int handle_krx(int krx_sock, int pipe_write, int pipe_read) {
                     printf("[KRX-Pipe] Received request with tr_id: %d, length: %d\n", tr_id, header->length);
 
                     switch (tr_id) {
-                        case MKQ_STOCK_INFOS:
-                            mkq_thread *args = create_mkq_thread_args(krx_sock, pipe_buffer, header->length);
+                        case MKQ_STOCK_INFOS: //tr_id: omq_stock_infos와 동일 (mpq_stock_infos)
+                            mkq_thread *args = create_mkq_thread_args(pipe_write, today_filepath, pipe_buffer, header->length);
 
                             pthread_t request_thread;
                             if (pthread_create(&request_thread, NULL, handle_mkq_stock_infos, args) != 0) {

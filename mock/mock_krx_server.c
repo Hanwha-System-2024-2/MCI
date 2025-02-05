@@ -9,6 +9,7 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/select.h>
+#include <signal.h>
 
 #include "../network/krx_network.h"
 #include "env.h"

@@ -2,16 +2,19 @@
 #define KRX_HEADER_H
 
 #include "../include/common.h" // 공통 헤더 포함
+#include "oms_network.h"
 
 // 종목 정보 요청 구조체
 typedef struct {
 	hdr hdr;
+	int oms_sock;
 } mkq_stock_infos;
 
 // 종목 정보 요청 변환 구조체
 typedef struct {
-    int krx_sock; // 소켓
-    mkq_stock_infos *data;
+    int pipe_write; // 소켓
+	char *today_filepath;
+    mkq_stock_infos *request;
 } mkq_thread;
 
 // 종목 정보 응답 구조체 
@@ -22,7 +25,6 @@ typedef struct {
 
 // 종목 정보 응답 변환 구조체 
 typedef struct {
-	int pipe_write;
 	kmt_stock_infos *data;
 } kmt_thread;
 
