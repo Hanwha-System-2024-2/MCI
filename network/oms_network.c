@@ -12,7 +12,11 @@
 #include <mysql/mysql.h>
 #include <pthread.h>
 #include "../include/common.h"
+#include "pools/thread_pool.h"
+#include "pools/db_pool.h"
+#include "env.h"
 
+#define NUM_THREADS 4
 #define BUFFER_SIZE 8192
 #define LOGIN_SUCCESS 200
 #define ID_NOT_FOUND 201
@@ -28,7 +32,65 @@ pthread_mutex_t client_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 char buffer[BUFFER_SIZE];
 size_t buffer_offset = 0;
 
-void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
+thread_pool_t *thrd_pool;
+db_pool_t *db_pool;
+
+typedef struct {
+    int fd;              
+    int epoll_fd;        
+    int pipe_write;      
+    int pipe_read;      
+    size_t body_length;  
+    char body[BUFFER_SIZE]; 
+} client_task_t;
+
+void process_client_task(void *arg) {
+    client_task_t *task = (client_task_t *)arg;
+    int fd = task->fd;
+    int pipe_write = task->pipe_write;
+    int pipe_read = task->pipe_read;
+    char *body = task->body; 
+
+    hdr *header = (hdr *)body;
+
+    if (fd == pipe_read) {  
+        printf("[OMS-KRX -> OMS-MCI] event occurs\n");
+        switch (header->tr_id) {
+            case MOT_STOCK_INFOS:
+                handle_mot_stock_infos((mpt_stock_infos *)body);
+                break;
+            case MOT_CURRENT_MARKET_PRICE:
+                handle_mot_market_price((mot_market_price *)body);
+                break;
+            default:
+                printf("[ERROR] Unknown TR_ID from pipe: %d\n", header->tr_id);
+                break;
+        }
+    } else {
+        printf("[OMS -> OMS-MCI] event occurs\n");
+        switch (header->tr_id) {
+            case OMQ_LOGIN:
+                handle_omq_login((omq_login *)body, fd);
+                break;
+            case OMQ_TX_HISTORY:
+                handle_omq_tx_history((omq_tx_history *)body, fd);
+                break;
+            case OMQ_STOCK_INFOS:
+                handle_omq_stock_infos((omq_stock_infos *)body, pipe_write, fd);
+                break;
+            case OMQ_CURRENT_MARKET_PRICE:
+                handle_omq_market_price((omq_market_price *)body, pipe_write);
+                break;
+            default:
+                printf("[ERROR] Unknown TR_ID from OMS socket: %d\n", header->tr_id);
+                break;
+        }
+    }
+
+    free(task);
+}
+
+void handle_oms(int oms_sock, int pipe_write, int pipe_read) {
     int epoll_fd = epoll_create1(0);
     if (epoll_fd == -1) {
         perror("epoll_create1");
@@ -50,6 +112,10 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
         exit(EXIT_FAILURE);
     }
 
+    thrd_pool = create_thread_pool(NUM_THREADS);
+    printf("-------[THREAD POOL] ");
+    db_pool = init_db_pool(MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DBNAME);
+    printf("[DB_CONNECTION_POOL] -------\n");
 
     while (1) {
         int nfds = epoll_wait(epoll_fd, events, MAX_CLIENTS + 2, -1); 
@@ -94,64 +160,45 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
 
             buffer_offset += len;
             
-            // Process all complete messages in the buffer
             size_t processed_bytes = 0;
             while (processed_bytes + sizeof(hdr) <= buffer_offset) {
                 hdr *header = (hdr *)(buffer + processed_bytes);
 
                 if (processed_bytes + header->length > buffer_offset) {
-                    break;  // Wait for more data
+                    break; 
                 }
 
-                void *body = buffer + processed_bytes;
 
                 if (events[i].data.fd == oms_sock) {
                     printf("[Connection]\n");
-                } else if (events[i].data.fd == pipe_read) {
-                    printf("[OMS-KRX -> OMS-MCI] event occurs\n");
-                    switch (header->tr_id) {
-                        case MOT_STOCK_INFOS:
-                            handle_mot_stock_infos((mpt_stock_infos *)body);
-                            break;
-                        case MOT_CURRENT_MARKET_PRICE:
-                            handle_mot_market_price((mot_market_price *)body);
-                            break;
-                        default:
-                            printf("[ERROR] Unknown TR_ID from pipe: %d\n", header->tr_id);
-                            break;
+                } else{
+                    client_task_t *task = malloc(sizeof(client_task_t));
+                    if (!task) {
+                        perror("malloc failed");
+                        continue;
                     }
-                }
-                else{
-                    printf("[OMS -> OMS-MCI] event occurs\n");
-                    switch (header->tr_id) {
-                        case OMQ_LOGIN:
-                            handle_omq_login((omq_login *)body, events[i].data.fd, conn);
-                            break;
-                        case OMQ_TX_HISTORY:
-                            handle_omq_tx_history((omq_tx_history *) body, events[i].data.fd, conn);
-                            break;
-                        case OMQ_STOCK_INFOS:
-                            handle_omq_stock_infos((omq_stock_infos *)body, pipe_write, events[i].data.fd);
-                            break;
-                        case OMQ_CURRENT_MARKET_PRICE:
-                            handle_omq_market_price((omq_market_price *)body, pipe_write);
-                            break;
-                        default:
-                            printf("[ERROR] Unknown TR_ID from OMS socket: %d\n", header->tr_id);
-                            break;
-                    }
+
+                    task->fd = events[i].data.fd;
+                    task->epoll_fd = epoll_fd;
+                    task->pipe_write = pipe_write;
+                    task->pipe_read = pipe_read;
+                    task->body_length = header->length;
+
+                    memcpy(task->body, buffer + processed_bytes, header->length);
+
+                    submit_task(thrd_pool, process_client_task, task);
                 }
                 processed_bytes += header->length;
             }
 
-            // Shift unprocessed bytes to the beginning of the buffer
             if (processed_bytes < buffer_offset) {
                 memmove(buffer, buffer + processed_bytes, buffer_offset - processed_bytes);
             }
             buffer_offset -= processed_bytes;
         }
     }
-
+    destroy_thread_pool(thrd_pool);
+    destroy_db_pool(db_pool);
     close(epoll_fd);
     close(oms_sock);
     close(pipe_write);
@@ -159,16 +206,15 @@ void handle_oms(MYSQL *conn, int oms_sock, int pipe_write, int pipe_read) {
     exit(EXIT_SUCCESS);
 }
 
-
-void handle_omq_login(omq_login *data, int oms_sock, MYSQL *conn) {
+void handle_omq_login(omq_login *data, int oms_sock) {
     printf("[OMQ_LOGIN] User ID: %s, Password: %s\n", data->user_id, data->user_pw);
 
-    int status_code = validate_user_credentials(conn, data->user_id, data->user_pw);
+    int status_code = validate_user_credentials(data->user_id, data->user_pw);
 
     send_login_response(oms_sock, data->user_id, status_code);
 }
 
-void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
+void handle_omq_tx_history(omq_tx_history *data, int oms_sock) {
     printf("[OMQ_TX_HISTORY] request id: %s\n", data->user_id);
 
     char query[512];
@@ -178,6 +224,8 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
              "FROM tx_history "
              "WHERE user_id = '%s' "
              "LIMIT 50", data->user_id);
+
+    MYSQL *conn = get_db_connection(db_pool);
 
     if (mysql_query(conn, query)) {
         fprintf(stderr, "[handle_omq_tx_history] Query failed: %s\n", mysql_error(conn));
@@ -223,18 +271,18 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
         response.tx_history[row_count].price = atoi(row[8]);
         response.tx_history[row_count].status = row[9][0];
         
-        // printf("[TX_HISTORY] #%d Stock Code: %s, Name: %s, Tx Code: %s, User: %s, "
-        //    "Order Type: %c, Quantity: %d, Reject Code: %s, Datetime: %s, Status: %c\n",
-        //    row_count + 1,
-        //    response.tx_history[row_count].stock_code,
-        //    response.tx_history[row_count].stock_name,
-        //    response.tx_history[row_count].tx_code,
-        //    response.tx_history[row_count].user_id,
-        //    response.tx_history[row_count].order_type,
-        //    response.tx_history[row_count].quantity,
-        //    response.tx_history[row_count].reject_code,
-        //    response.tx_history[row_count].datetime,
-        //    response.tx_history[row_count].status);
+        printf("[TX_HISTORY] #%d Stock Code: %s, Name: %s, Tx Code: %s, User: %s, "
+           "Order Type: %c, Quantity: %d, Reject Code: %s, Datetime: %s, Status: %c\n",
+           row_count + 1,
+           response.tx_history[row_count].stock_code,
+           response.tx_history[row_count].stock_name,
+           response.tx_history[row_count].tx_code,
+           response.tx_history[row_count].user_id,
+           response.tx_history[row_count].order_type,
+           response.tx_history[row_count].quantity,
+           response.tx_history[row_count].reject_code,
+           response.tx_history[row_count].datetime,
+           response.tx_history[row_count].status);
         
         row_count++;
     }
@@ -249,6 +297,7 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock, MYSQL *conn) {
     }
 
     mysql_free_result(result);
+    release_db_connection(db_pool,conn);
 }
 
 void handle_omq_stock_infos(omq_stock_infos *data, int pipe_write, int oms_sock) {
@@ -296,10 +345,12 @@ void handle_mot_market_price(mot_market_price *data) {
     broadcast_to_clients(data, sizeof(mot_market_price));
 }
 
-int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user_pw) {
+int validate_user_credentials(const char *user_id, const char *user_pw) {
     char query[256];
     snprintf(query, sizeof(query),
              "SELECT user_pw FROM users WHERE user_id = '%s'", user_id);
+
+    MYSQL *conn = get_db_connection(db_pool);
 
     if (mysql_query(conn, query)) {
         fprintf(stderr, "[validate_user_credentials] Query failed: %s\n", mysql_error(conn));
@@ -325,6 +376,8 @@ int validate_user_credentials(MYSQL *conn, const char *user_id, const char *user
     }
 
     mysql_free_result(result);
+    release_db_connection(db_pool,conn);
+    
     return status_code;
 }
 

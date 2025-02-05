@@ -45,7 +45,8 @@ void send_stock_info_request(int client_sock){
     }
 }
 
-void send_hisotry_request(int client_sock, const char *user_id){
+void send_history_request(int client_sock, const char *user_id){
+    printf("[Send HISTORY REQUEST]\n");
     omq_tx_history history;
 
     history.hdr.tr_id = 12;
@@ -157,16 +158,16 @@ void start_oms_client() {
     printf("[OMS Client] Connected to MCI Server at %s:%d\n", MCI_SERVER_IP, MCI_SERVER_PORT);
 
     // TEST 성공
-    for(int i=0;i<1;i++){
+    for(int i=0;i<2;i++){
         // send_login_request(client_sock, "hj", "1234"); // fail: 201
         // send_login_request(client_sock, "jina", "123"); // fail: 202
         // send_login_request(client_sock, "jina", "1234"); // success: 200
-        // send_hisotry_request(client_sock, "jina");
+        // send_history_request(client_sock, "jina");
         send_stock_info_request(client_sock);
-        if(i% 10 == 0) usleep(500000);
+        // if(i% 10 == 0) usleep(500000);
     }
 
-    send_stock_info_request(client_sock);
+    // send_stock_info_request(client_sock);
     
     printf("[OMS Client] Request sent to MCI Server\n");
 

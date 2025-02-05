@@ -13,7 +13,12 @@ MOCK_DIR = mock
 NETWORK_SRC = $(wildcard $(NETWORK_DIR)/*.c)
 SERVER_SRC = $(wildcard $(SERVER_DIR)/*.c)
 MOCK_SRC = $(wildcard $(MOCK_DIR)/*.c)
-NETWORK_OBJS = $(NETWORK_SRC:.c=.o)
+
+# 추가: db_pool.c, thread_pool.c 포함
+DB_THREAD_SRC = network/pools/db_pool.c network/pools/thread_pool.c
+
+# Object files
+NETWORK_OBJS = $(NETWORK_SRC:.c=.o) $(DB_THREAD_SRC:.c=.o)  # 🔹 db_pool.o, thread_pool.o 추가
 SERVER_OBJS = $(SERVER_SRC:.c=.o)
 MOCK_OBJS = $(MOCK_SRC:.c=.o)
 
