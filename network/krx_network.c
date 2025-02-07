@@ -19,7 +19,7 @@
 #include "oms_network.h"
 #include "../data/batch.h"
 
-#define BUFFER_SIZE 1024 // 버퍼 사이즈
+#define BUFFER_SIZE 1000000 // 버퍼 사이즈
 
 
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER; // Socket 동기화

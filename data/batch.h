@@ -4,6 +4,6 @@
 
 #define FILE_PREFIX "stock_info_"
 #define FILE_EXTENSION ".bin"
-#define FILE_DIRECTORY "/home/ec2-user/Hanwha/MCI/data/"  // 저장할 디렉토리
+#define FILE_DIRECTORY "./data/"  // 저장할 디렉토리
 
 #endif

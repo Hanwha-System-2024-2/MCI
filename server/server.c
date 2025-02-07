@@ -59,7 +59,7 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
         perror("OMS socket creation failed");
         exit(EXIT_FAILURE);
     }
-
+    
     oms_addr.sin_family = AF_INET;
     oms_addr.sin_port = htons(MCI_SERVER_PORT);
     oms_addr.sin_addr.s_addr = INADDR_ANY;
@@ -78,15 +78,8 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
 
     printf("[OMS Server] Listening on port %d\n", MCI_SERVER_PORT);
 
-    MYSQL *conn = mysql_init(NULL);
-    if (connect_db(conn) != 1) {
-        perror("Database connection failed");
-        exit(EXIT_FAILURE);
-    }
+    handle_oms(oms_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
 
-    handle_oms(conn, oms_sock, pipe_oms_to_krx[1], pipe_krx_to_oms[0]);
-
-    mysql_close(conn);
     close(oms_sock);
 }
 
