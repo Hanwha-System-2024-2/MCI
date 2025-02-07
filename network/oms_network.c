@@ -14,15 +14,20 @@
 #include "../include/common.h"
 #include "pools/thread_pool.h"
 #include "pools/db_pool.h"
+#include "waitfree-mpsc-queue/mpscq.h"
 #include "env.h"
+#include <signal.h>
+#include "errno.h"
+#include "fcntl.h"
 
-#define NUM_THREADS 4
-#define BUFFER_SIZE 8192
+#define NUM_THREADS 8
+#define BUFFER_SIZE 1000000
 #define LOGIN_SUCCESS 200
 #define ID_NOT_FOUND 201
 #define PASSWORD_MISMATCH 202
 #define SERVER_ERROR 500
 #define MAX_CLIENTS 100
+#define BROADCAST_FD 9999
 
 // 클라이언트 소켓 관리
 int oms_clients[MAX_CLIENTS];
@@ -35,6 +40,11 @@ size_t buffer_offset = 0;
 thread_pool_t *thrd_pool;
 db_pool_t *db_pool;
 
+struct mpscq *socket_queue;
+struct mpscq *pipe_queue;
+
+volatile sig_atomic_t stop_event_loop = 0;
+
 typedef struct {
     int fd;              
     int epoll_fd;        
@@ -43,6 +53,74 @@ typedef struct {
     size_t body_length;  
     char body[BUFFER_SIZE]; 
 } client_task_t;
+
+client_task_t *create_task(void *data, size_t data_size, int destination) {
+    client_task_t *task = malloc(sizeof(client_task_t));
+    if (!task) {
+        perror("[create_task] malloc failed");
+        return NULL;
+    }
+
+    task->body_length = data_size;
+    memcpy(task->body, data, data_size);
+
+    if (destination >= 0) {  // 소켓 전송일 경우
+        task->fd = destination;
+    } else {  // 파이프 전송일 경우
+        task->pipe_write = -destination;
+    }
+
+    return task;
+}
+
+void handle_sigint(int sig) {
+    (void) sig;
+    printf("\n[handle_sigint] SIGINT received. Stopping event loops...\n");
+    stop_event_loop = 1;
+}
+
+void *socket_event_loop(void *arg) {
+    (void)arg;
+    printf("[socket_event_loop] Started.\n");
+
+    while (!stop_event_loop) {
+        client_task_t *task = (client_task_t *)mpscq_dequeue(socket_queue);
+        if (task) {
+            if (task->fd == BROADCAST_FD) {
+                broadcast_to_clients(task->body, task->body_length);
+            } 
+            else {
+                ssize_t bytes_sent = send(task->fd, task->body, task->body_length, 0);
+                if (bytes_sent == -1) {
+                    perror("[socket_event_loop] send failed");
+                }
+            }
+            free(task);
+        }
+    }
+
+    printf("[socket_event_loop] Stopping. Cleaning up resources...\n");
+    return NULL;
+}
+
+void *pipe_event_loop(void *arg) {
+    (void) arg;
+    printf("[pipe_event_loop] Started.\n");
+    
+    while (!stop_event_loop) {
+        client_task_t *task = (client_task_t *)mpscq_dequeue(pipe_queue);
+        if (task) {
+            ssize_t bytes_written = write(task->pipe_write, task->body, task->body_length);
+            if (bytes_written == -1) 
+                perror("[pipe_event_loop] write failed");
+
+            free(task);
+        }
+    }
+
+    printf("[pipe_event_loop] Stopping. Cleaning up resources...\n");
+    return NULL;
+}
 
 void process_client_task(void *arg) {
     client_task_t *task = (client_task_t *)arg;
@@ -66,7 +144,8 @@ void process_client_task(void *arg) {
                 printf("[ERROR] Unknown TR_ID from pipe: %d\n", header->tr_id);
                 break;
         }
-    } else {
+    } 
+    else {
         printf("[OMS -> OMS-MCI] event occurs\n");
         switch (header->tr_id) {
             case OMQ_LOGIN:
@@ -116,6 +195,15 @@ void handle_oms(int oms_sock, int pipe_write, int pipe_read) {
     printf("-------[THREAD POOL] ");
     db_pool = init_db_pool(MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DBNAME);
     printf("[DB_CONNECTION_POOL] -------\n");
+
+    signal(SIGINT, handle_sigint); // sock, pipe thrd 자원정리용 시그널
+
+    socket_queue = mpscq_create(NULL, 9000);
+    pipe_queue = mpscq_create(NULL, 9000);
+
+    pthread_t socket_thread, pipe_thread;
+    pthread_create(&socket_thread, NULL, socket_event_loop, NULL);
+    pthread_create(&pipe_thread, NULL, pipe_event_loop, NULL);
 
     while (1) {
         int nfds = epoll_wait(epoll_fd, events, MAX_CLIENTS + 2, -1); 
@@ -168,7 +256,6 @@ void handle_oms(int oms_sock, int pipe_write, int pipe_read) {
                     break; 
                 }
 
-
                 if (events[i].data.fd == oms_sock) {
                     printf("[Connection]\n");
                 } else{
@@ -197,6 +284,13 @@ void handle_oms(int oms_sock, int pipe_write, int pipe_read) {
             buffer_offset -= processed_bytes;
         }
     }
+
+    pthread_join(socket_thread, NULL);
+    pthread_join(pipe_thread, NULL);
+
+    mpscq_destroy(socket_queue);
+    mpscq_destroy(pipe_queue);
+
     destroy_thread_pool(thrd_pool);
     destroy_db_pool(db_pool);
     close(epoll_fd);
@@ -289,11 +383,10 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock) {
 
     response.hdr.length = sizeof(response);
 
-    // Send the response to the OMS
-    if (send(oms_sock, &response, sizeof(response), 0) == -1) {
-        perror("[handle_omq_tx_history] Failed to send response to OMS");
-    } else {
-        printf("[handle_omq_tx_history]: Sent %d transaction records to OMS\n", row_count);
+    client_task_t *task = create_task(&response, sizeof(response), oms_sock);
+    if (!mpscq_enqueue(socket_queue, task)) {
+        perror("[handle_omq_stock_infos] Failed to enqueue task");
+        free(task);
     }
 
     mysql_free_result(result);
@@ -303,46 +396,65 @@ void handle_omq_tx_history(omq_tx_history *data, int oms_sock) {
 void handle_omq_stock_infos(omq_stock_infos *data, int pipe_write, int oms_sock) {
     printf("[OMQ_STOCK_INFOS] Forwarding request to KRX process from oms_sock: %d\n", oms_sock);
     
-    if(data->hdr.length != sizeof(omq_stock_infos)){
-        perror("[OMQ_STOCK_INFOS] Failed to write to pipe");
+    if (data->hdr.length != sizeof(omq_stock_infos)) {
+        perror("[OMQ_STOCK_INFOS] Invalid data size");
+        return;
     }
+
     mpq_stock_infos stockInfo;
     stockInfo.hdr.tr_id = MKQ_STOCK_INFOS;
     stockInfo.hdr.length = sizeof(mpq_stock_infos);
     stockInfo.oms_sock = oms_sock;
 
-    if (write(pipe_write, &stockInfo, sizeof(stockInfo)) == -1) {
-        perror("[OMQ_STOCK_INFOS] Failed to write to pipe");
+    client_task_t *task = create_task(&stockInfo, sizeof(stockInfo), -pipe_write);
+    if (!task) {
+        perror("[handle_omq_stock_infos] Task creation failed");
+        return;
+    }
+
+    if (!mpscq_enqueue(pipe_queue, task)) {
+        perror("[handle_omq_stock_infos] Failed to enqueue task");
+        free(task);
     }
 }
 
 void handle_mot_stock_infos(mpt_stock_infos *data) {
     printf("[MOT_STOCK_INFOS] Sending stock info to requesting OMS client: %d\n", data->oms_sock);
     
-    int oms_sock = data->oms_sock;
-    
     mot_stock_infos stockInfo;
     stockInfo.hdr.tr_id = MOT_STOCK_INFOS;
     stockInfo.hdr.length = sizeof(mot_stock_infos);
     memcpy(stockInfo.body, data->body, sizeof(data->body));
 
-    if (send(oms_sock, &stockInfo, sizeof(stockInfo), 0) == -1) {
-        perror("[MOT_STOCK_INFOS] Failed to send stock info to OMS client");
+    client_task_t *task = create_task(&stockInfo, sizeof(stockInfo), data->oms_sock);
+    if (!task) {
+        perror("[handle_mot_stock_infos] Task creation failed");
+        return;
+    }
+
+    if (!mpscq_enqueue(socket_queue, task)) {
+        perror("[handle_mot_stock_infos] Failed to enqueue task");
+        free(task);
     }
 }
 
 void handle_omq_market_price(omq_market_price *data, int pipe_write) {
     printf("[OMQ_MARKET_PRICE] Forwarding request to KRX process\n");
-
-    if (write(pipe_write, data, sizeof(omq_market_price)) == -1) {
-        perror("[OMQ_MARKET_PRICE] Failed to write to pipe");
+    client_task_t *task = create_task(data, sizeof(omq_market_price), -pipe_write);
+    if (!mpscq_enqueue(pipe_queue, task)) {
+        perror("[handle_omq_stock_infos] Failed to enqueue task");
+        free(task);
     }
 }
 
 void handle_mot_market_price(mot_market_price *data) {
     printf("[MOT_MARKET_PRICE] Broadcasting market price to all OMS clients\n");
+    client_task_t *task = create_task(data, sizeof(mot_market_price), BROADCAST_FD);
 
-    broadcast_to_clients(data, sizeof(mot_market_price));
+    if (!mpscq_enqueue(socket_queue, task)) {
+        perror("[handle_omq_stock_infos] Failed to enqueue task");
+        free(task);
+    }
 }
 
 int validate_user_credentials(const char *user_id, const char *user_pw) {
@@ -388,8 +500,10 @@ void send_login_response(int oms_sock,char *user_id, int status_code) {
     strncpy(response.user_id, user_id, sizeof(response.user_id) - 1);
     response.status_code = status_code;
 
-    if (send(oms_sock, &response, sizeof(response), 0) == -1) {
-        perror("[send_login_response] Failed to send response to OMS");
+    client_task_t *task = create_task(&response, sizeof(response), oms_sock);
+    if (!mpscq_enqueue(socket_queue, task)) {
+        perror("[handle_omq_stock_infos] Failed to enqueue task");
+        free(task);
     }
     
     printf("[send_login_response]: status code:%d\n", status_code);
@@ -435,11 +549,14 @@ void remove_client(int client_sock, int epoll_fd) {
 
 void broadcast_to_clients(void *data, size_t data_size) {
     pthread_mutex_lock(&client_list_mutex);
+
+    mot_market_price *price_data = (mot_market_price*)data;
     for (int i = 0; i < client_count; i++) {
-        if (send(oms_clients[i], data, data_size, 0) == -1) {
+        if (send(oms_clients[i], price_data, data_size, 0) == -1) {
             perror("[broadcast_to_clients] Failed to send to client");
             remove_client(oms_clients[i], 0);
         }
     }
+
     pthread_mutex_unlock(&client_list_mutex);
 }

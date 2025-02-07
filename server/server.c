@@ -59,7 +59,7 @@ void run_oms_server(int pipe_krx_to_oms[2], int pipe_oms_to_krx[2]) {
         perror("OMS socket creation failed");
         exit(EXIT_FAILURE);
     }
-
+    
     oms_addr.sin_family = AF_INET;
     oms_addr.sin_port = htons(MCI_SERVER_PORT);
     oms_addr.sin_addr.s_addr = INADDR_ANY;

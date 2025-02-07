@@ -1,0 +1,3 @@
+[submodule "network/waitfree-mpsc-queue"]
+	path = network/waitfree-mpsc-queue
+	url = git@github.com:Hanwha-System-2024-2/waitfree-mpsc-queue.git

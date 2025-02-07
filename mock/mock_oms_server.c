@@ -11,7 +11,7 @@
 #include "../network/krx_network.h"
 #include "../include/common.h"
 
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 1000000
 
 void send_login_request(int client_sock, const char *user_id, const char *user_pw) {
     omq_login login;
@@ -28,7 +28,7 @@ void send_login_request(int client_sock, const char *user_id, const char *user_p
         exit(EXIT_FAILURE);
     }
 
-    printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
+    // printf("[OMS Client] Sent login request: ID='%s', PW='%s'\n", user_id, user_pw);
 }
 
 
@@ -46,7 +46,7 @@ void send_stock_info_request(int client_sock){
 }
 
 void send_history_request(int client_sock, const char *user_id){
-    printf("[Send HISTORY REQUEST]\n");
+    // printf("[Send HISTORY REQUEST]\n");
     omq_tx_history history;
 
     history.hdr.tr_id = 12;
@@ -78,6 +78,12 @@ void handle_server_response(int server_sock) {
     char buffer[BUFFER_SIZE];
     size_t buffer_offset = 0;
 
+    // 각 응답 트랜잭션 ID에 대한 카운터 변수 추가
+    int login_response_count = 0;
+    int tx_history_response_count = 0;
+    int stock_info_response_count = 0;
+    int market_price_response_count = 0;
+
     while (1) {
         ssize_t recv_len = recv(server_sock, buffer + buffer_offset, BUFFER_SIZE - buffer_offset, 0);
         if (recv_len <= 0) {
@@ -90,18 +96,20 @@ void handle_server_response(int server_sock) {
         size_t processed_bytes = 0;
         while (processed_bytes + sizeof(hdr) <= buffer_offset) {
             hdr *header = (hdr *)(buffer + processed_bytes);
-            printf("header->length: %d\n",header->length);
+            // printf("header->length: %d\n", header->length);
             if (processed_bytes + header->length > buffer_offset) {
                 break;
             }
 
             if (header->tr_id == MOT_LOGIN) {
-                mot_login *login = (mot_login *)(buffer + processed_bytes);
-                printf("[OMS Client] Login Response: tr_id: %d, status code: %d, user_id: %s\n", login->hdr.tr_id, login->status_code, login->user_id);
+                // mot_login *login = (mot_login *)(buffer + processed_bytes);
+                // printf("[OMS Client] Login Response: tr_id: %d, status code: %d, user_id: %s\n", login->hdr.tr_id, login->status_code, login->user_id);
+                login_response_count++;  // 로그인 응답 카운트 증가
+                printf("[OMS Client] Total Login Responses Received: %d\n", login_response_count); // 실시간 출력
             }
-            else if(header->tr_id == MOT_TX_HISTORY){
+            else if (header->tr_id == MOT_TX_HISTORY) {
                 mot_tx_history *history = (mot_tx_history *)(buffer + processed_bytes);
-                printf("[OMS Client] TX_history Response\n");
+                // printf("[OMS Client] TX_history Response\n");
 
                 for (int i = 0; i < 50; i++) {
                     transaction *tx = &history->tx_history[i];
@@ -110,21 +118,33 @@ void handle_server_response(int server_sock) {
                         continue;
                     }
 
-                    print_tx(tx, i);
+                    // print_tx(tx, i);
                 }
+                tx_history_response_count++;  // 거래 내역 응답 카운트 증가
+                printf("[OMS Client] Total TX History Responses Received: %d\n", tx_history_response_count); // 실시간 출력
             }
             else if (header->tr_id == MOT_STOCK_INFOS) {
-                mot_stock_infos *stockInfo = (mot_stock_infos *)(buffer + processed_bytes);
-                printf("[OMS Client] stock_info Response\n");
+                // mot_stock_infos *stockInfo = (mot_stock_infos *)(buffer + processed_bytes);
+                // printf("[OMS Client] stock_info Response\n");
 
-                for (int i = 0; i < 4; i++) {
-                    printf("Stock %d: code=%.6s, name=%s\n", i + 1,
-                        stockInfo->body[i].stock_code,
-                        stockInfo->body[i].stock_name
-                    );
-                }
+                // for (int i = 0; i < 4; i++) {
+                //     printf("Stock %d: code=%.6s, name=%s\n", i + 1,
+                //         stockInfo->body[i].stock_code,
+                //         stockInfo->body[i].stock_name
+                //     );
+                // }
+                stock_info_response_count++;  // 주식 정보 응답 카운트 증가
+                printf("[OMS Client] Total Stock Info Responses Received: %d\n", stock_info_response_count); // 실시간 출력
             }
-            else printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
+            else if (header->tr_id == MOT_CURRENT_MARKET_PRICE) {
+                // mot_market_price *mp = (mot_market_price *)(buffer + processed_bytes);
+                // printf("[OMS Client] market_price Response\n");
+                market_price_response_count++;  // 시장 가격 응답 카운트 증가
+                printf("[OMS Client] Total Market Price Responses Received: %d\n", market_price_response_count); // 실시간 출력
+            }
+            else {
+                printf("[OMS Client] Received TR_ID: %d\n", header->tr_id);
+            }
 
             processed_bytes += header->length;
         }
@@ -158,13 +178,13 @@ void start_oms_client() {
     printf("[OMS Client] Connected to MCI Server at %s:%d\n", MCI_SERVER_IP, MCI_SERVER_PORT);
 
     // TEST 성공
-    for(int i=0;i<2;i++){
+    for(int i=0;i<100;i++){
         // send_login_request(client_sock, "hj", "1234"); // fail: 201
         // send_login_request(client_sock, "jina", "123"); // fail: 202
-        // send_login_request(client_sock, "jina", "1234"); // success: 200
-        // send_history_request(client_sock, "jina");
+        send_login_request(client_sock, "jina", "1234"); // success: 200
+        send_history_request(client_sock, "jina");
         send_stock_info_request(client_sock);
-        // if(i% 10 == 0) usleep(500000);
+        // if(i % 100 == 0) usleep(100000);
     }
 
     // send_stock_info_request(client_sock);
